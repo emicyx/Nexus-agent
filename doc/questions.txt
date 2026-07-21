@@ -1,0 +1,3 @@
+1。添加了agent长期记忆后运行速度慢
+原因：LLM 评估（LLM Evaluation / Reranking） 环节需要重复请求多次，单 task 耗时大幅增加
+解决方式：换小模型加异步评估

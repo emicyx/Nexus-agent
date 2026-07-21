@@ -1,0 +1,59 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --background: #fff5f7;
+  --foreground: #4a4a4a;
+  --card: #ffffff;
+  --border: #fbcfe0;
+  --accent: #f472b6;
+  --accent-hover: #ec4899;
+  --heading: #831843;
+  --muted: #d6a0b5;
+}
+
+body {
+  color: var(--foreground);
+  background: var(--background);
+}
+
+/* 自定义滚动条 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #fbcfe0;
+  border-radius: 3px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #f9a8d4;
+}
+
+/* 呼吸灯动画 — Agent 思考过程边框光晕 */
+@keyframes breath {
+  0%, 100% {
+    box-shadow: 0 0 4px rgba(244, 143, 177, 0.3);
+    border-color: rgba(244, 143, 177, 0.3);
+  }
+  50% {
+    box-shadow: 0 0 18px rgba(244, 143, 177, 0.7), 0 0 36px rgba(244, 143, 177, 0.15);
+    border-color: rgba(244, 143, 177, 0.8);
+  }
+}
+
+/* 呼吸指示灯 — 小型圆点呼吸特效 */
+@keyframes breath-dot {
+  0%, 100% {
+    box-shadow: 0 0 2px rgba(244, 143, 177, 0.4);
+    background: rgba(244, 143, 177, 0.5);
+  }
+  50% {
+    box-shadow: 0 0 10px rgba(244, 143, 177, 0.9), 0 0 20px rgba(244, 143, 177, 0.3);
+    background: rgba(244, 143, 177, 1);
+  }
+}

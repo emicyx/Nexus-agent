@@ -1,0 +1,120 @@
+project-nexus/
+├── .env.example                 # 全局环境变量模板 (API Keys, DB URLs)
+├── docker-compose.yml           # 一键编排: Backend, Frontend, Postgres, Redis
+├── Makefile                     # 常用命令快捷方式 (make dev, make build)
+├── README.md                    # 项目说明与启动指南
+│
+├── backend/                     # 🐍 Python 核心引擎 (FastAPI + CrewAI)
+│   ├── pyproject.toml           # Python 依赖管理 (推荐 uv 或 poetry)
+│   ├── Dockerfile               # Python 容器构建
+│   ├── alembic.ini              # 数据库迁移配置
+│   ├── alembic/                 # 数据库迁移脚本 (Versions)
+│   │
+│   └── app/                     # FastAPI 应用主目录
+│       ├── main.py              # FastAPI 入口 (挂载路由, CORS, 生命周期事件)
+│       ├── config.py            # 环境变量读取 (Pydantic Settings)
+│       │
+│       ├── api/                 # 🌐 API 路由层 (Controllers)
+│       │   └── v1/
+│       │       ├── chat.py      # 核心: SSE 流式聊天接口
+│       │       ├── agents.py    # Agent 角色与 Prompt 配置 CRUD
+│       │       ├── tools.py     # 工具注册与启用管理
+│       │       ├── knowledge.py # RAG 知识库文档上传与向量化
+│       │       └── hitl.py      # HITL 审批回调接口 (前端点击批准/拒绝)
+│       │
+│       ├── core/                # 🧠 核心抽象层 (高扩展性的基石)
+│       │   ├── interfaces.py    # 抽象基类: ILLMProvider, IMemoryStore, ITool
+│       │   ├── registry.py      # 动态注册表: ProviderRegistry, ToolRegistry
+│       │   ├── events.py        # 事件总线: asyncio.Queue 管理, SSE 流格式化
+│       │   ├── hitl_manager.py  # HITL 状态机: Redis Pub/Sub 交互, 超时熔断
+│       │   └── exceptions.py    # 全局自定义异常与错误码
+│       │
+│       ├── crews/               # 🚀 CrewAI 编排层 (动态化核心)
+│       │   ├── factory.py       # 🌟 核心: 读取 DB 配置, 动态实例化 Agent/Task/Crew
+│       │   ├── base_crew.py     # Crew 基类 (封装 Callback, 记忆注入逻辑)
+│       │   └── templates/       # 默认模板 (仅用于初始化 DB 数据)
+│       │       ├── agents.yaml  # 默认 Agent 角色模板
+│       │       └── tasks.yaml   # 默认 Task 流程模板
+│       │
+│       ├── tools/               # 🛠️ CrewAI 工具集 (Python 实现)
+│       │   ├── base.py          # 自定义 Tool 基类 (封装日志与事件广播)
+│       │   ├── hitl_tool.py     # 🌟 核心: 人类在环拦截工具 (触发 Redis 挂起)
+│       │   ├── rag_tool.py      # Agentic RAG 检索工具 (对接 pgvector)
+│       │   ├── web_search.py    # 网络搜索工具 (如 Serper/Tavily)
+│       │   └── code_executor.py # 沙盒代码执行工具 (可选)
+│       │
+│       ├── models/              # 🗄️ 数据库 ORM 模型 (SQLAlchemy)
+│       │   ├── base.py          # ORM 基类
+│       │   ├── agent.py         # Agent 配置表模型
+│       │   ├── tool.py          # Tool 配置表模型
+│       │   ├── document.py      # RAG 文档元数据表
+│       │   └── session.py       # 对话会话与记忆表
+│       │
+│       ├── schemas/             # 📦 Pydantic 数据校验模型 (Request/Response)
+│       │   ├── chat.py          # 聊天请求/响应 Schema
+│       │   ├── agent.py         # Agent 配置 Schema
+│       │   └── hitl.py          # HITL 审批状态 Schema
+│       │
+│       ├── services/            # 💼 业务逻辑层 (DB 交互, 外部 API)
+│       │   ├── agent_service.py # Agent 配置增删改查逻辑
+│       │   ├── rag_service.py   # 文档解析、分块、向量化入库逻辑
+│       │   └── memory_service.py# 长期/短期记忆读写逻辑
+│       │
+│       └── db/                  # 🔌 数据库连接管理
+│           ├── session.py       # PostgreSQL 异步 Session 工厂
+│           └── redis.py         # Redis 异步客户端 (用于 HITL)
+│
+├── frontend/                    # ⚛️ TS 前端控制台 (Next.js App Router)
+│   ├── package.json             # Node 依赖管理
+│   ├── next.config.js           # Next.js 配置 (API 代理等)
+│   ├── tailwind.config.ts       # Tailwind CSS 配置
+│   ├── Dockerfile               # Node 容器构建
+│   │
+│   └── src/
+│       ├── app/                 # 路由与页面
+│       │   ├── layout.tsx       # 根布局 (全局 Provider, 主题)
+│       │   ├── page.tsx         # 首页 (Dashboard 概览)
+│       │   ├── chat/
+│       │   │   └── page.tsx     # 核心: 对话视图 (集成 Vercel AI SDK)
+│       │   ├── config/
+│       │   │   └── page.tsx     # 核心: Agent/Tool 配置控制台
+│       │   └── knowledge/
+│       │       └── page.tsx     # RAG 知识库管理页
+│       │
+│       ├── components/          # UI 组件库
+│       │   ├── ui/              # 基础 UI 组件 (Shadcn UI: Button, Dialog, Input)
+│       │   ├── chat/            # 聊天业务组件
+│       │   │   ├── message-list.tsx
+│       │   │   ├── agent-step-card.tsx # 渲染 Agent 思考/工具调用步骤
+│       │   │   └── chat-input.tsx
+│       │   ├── config/          # 配置业务组件
+│       │   │   ├── agent-form.tsx      # Agent 属性编辑表单
+│       │   │   └── tool-selector.tsx   # 工具挂载多选框
+│       │   └── hitl/            # HITL 业务组件
+│       │       └── approval-modal.tsx  # 🌟 核心: 审批拦截弹窗
+│       │
+│       ├── lib/                 # 核心工具函数与 API 封装
+│       │   ├── api-client.ts    # Axios/Fetch 封装 (REST API 调用)
+│       │   ├── sse-parser.ts    # 🌟 核心: 解析 FastAPI 传来的 SSE 事件流
+│       │   └── utils.ts         # 通用工具函数 (cn, 格式化等)
+│       │
+│       ├── hooks/               # 自定义 React Hooks
+│       │   ├── use-chat.ts      # 封装 Vercel AI SDK 的 useChat
+│       │   ├── use-config.ts    # 配置数据获取与更新
+│       │   └── use-hitl.ts      # 监听 HITL 事件并控制弹窗状态
+│       │
+│       └── types/               # TypeScript 类型定义
+│           ├── api.ts           # API 响应类型
+│           └── agent.ts         # Agent/Tool 配置类型 (与后端 Pydantic 保持同步)
+│
+├── infra/                       # 🏗️ 基础设施与脚本
+│   ├── postgres/
+│   │   └── init.sql             # 初始化 pgvector 扩展的 SQL 脚本
+│   └── scripts/
+│       ├── seed_db.py           # 数据库种子数据 (初始化默认 Agent/Tool)
+│       └── clear_redis.sh       # 清理 Redis 残留的 HITL 状态
+│
+└── docs/                        # 📚 架构与开发文档
+    ├── architecture.md          # 系统架构白皮书
+    ├── hitl-flow.md             # HITL 跨语言拦截流程图与说明
+    └── extending-tools.md       # 开发者指南: 如何为 CrewAI 编写新 Tool

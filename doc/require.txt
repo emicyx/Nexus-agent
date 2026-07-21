@@ -1,0 +1,42 @@
+面向群体
+
+
+定位
+多功能，可自行按需配置的私人AI Agent助手，开发重点在于高度客制化，简单自定义
+需要干什么：用户可以在前端界面与agent简单对话；可以自定义编辑agent-team相关内容；可以指派agent执行任务
+
+agent-team需要哪些功能：
+可以对文件进行读写操作
+可以对网页进行解析操作
+可以替代用户执行部分操作（带扩展）
+#（暂时不考虑实现）可以对图片等多模态数据进行识别
+
+
+
+
+采用框架：
+Agent-team
+crewai + fast api + TypeScript (Next.js) 轻量控制前端          #后端将 Agent 的配置（Prompt、参数、图结构）抽象为 JSON/YAML 数据（Config as Code），前端通过 CopilotKit 编辑这些数据，后端接收数据后动态重载 Agent 实例。
+
+
+功能
+1.简单chat界面
+2.Agent-team模式(前端自定义task，crew，agent，skill)
+
+
+
+
+DB Schema 设计图：确认包含 agent_tools 中间表、tasks_config JSONB 字段、多角色 messages 表。
+SSE 事件字典：前后端约定好所有 Event Type（如 agent_thinking, tool_call, hitl_request, error）及对应的数据结构。
+HITL 状态机流转图：明确 PENDING -> APPROVED/REJECTED/TIMEOUT 的完整生命周期。
+异常处理与熔断策略：明确 Token 超限、API 超时、LLM 幻觉时的降级和报错提示方案。
+Tool 异步规范：团队达成共识，所有自定义 Tool 必须遵循异步非阻塞原则。
+
+
+todo:
+1.优化agent执行速度，目前执行速度慢，原因待排查
+2.用户对话持久化（已完成）
+3.验证HITL功能，似乎有问题（需要人工验证）已验证有问题
+4.继续构建crew生态
+5.agent返回内容都是一小段的文字，我认为需要更详细的返回
+6.loop-agent实现，可能要重新建一个crew团队

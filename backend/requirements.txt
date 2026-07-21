@@ -1,0 +1,46 @@
+# CrewAI 多智能体系统核心依赖
+crewai==1.9.3
+crewai-tools==1.9.3
+
+# HTTP 请求库
+requests==2.32.5
+
+# 数据验证
+pydantic==2.11.10
+pydantic-settings>=2.10.0
+
+# PostgreSQL 客户端（Week 3+ 使用）
+psycopg2-binary==2.9.10
+asyncpg~=0.30.0
+
+# ORM + 迁移（Week 3）
+sqlalchemy[asyncio]~=2.0.36
+alembic~=1.14.0
+
+# Playwright 浏览器自动化
+playwright~=1.60.0
+PyYAML~=6.0.3
+pillow~=12.2.0
+python-dotenv~=1.1.1
+
+# Web 层 (FastAPI)
+fastapi~=0.115.0
+uvicorn[standard]~=0.32.0
+
+# Redis（Week 5+ 使用）
+redis~=5.2.0
+
+# 向量检索（Week 4 RAG）
+pgvector~=0.3.6
+
+# 文件上传（Week 4 文档上传）
+aiofiles~=24.1.0
+python-multipart~=0.0.20
+
+# 文件工具（Week 9）
+python-docx~=1.2.0
+openpyxl~=3.1.0
+pypdf~=4.0.0
+
+# HTML→Markdown 转换（网页抓取入库工具）
+html2text~=2024.2.26
