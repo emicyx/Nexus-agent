@@ -1,6 +1,8 @@
 "use client";
 
+import { useRef, useEffect } from "react";
 import { type CollabStep } from "@/hooks/use-chat";
+import { agentStyle } from "@/lib/agent-style";
 import {
   Brain,
   Search,
@@ -11,23 +13,6 @@ import {
   Crown,
 } from "lucide-react";
 
-/** Agent 颜色映射 */
-const AGENT_STYLES: Record<string, { color: string; label: string }> = {
-  研究员: { color: "text-emerald-600 border-emerald-400", label: "研究员" },
-  撰稿人: { color: "text-sky-600 border-sky-400", label: "撰稿人" },
-  Crew: { color: "text-amber-600 border-amber-400", label: "Crew" },
-  团队主管: { color: "text-sakura-600 border-sakura-400", label: "团队主管" },
-};
-
-function agentStyle(agent?: string) {
-  return (
-    AGENT_STYLES[agent || ""] || {
-      color: "text-sakura-600 border-sakura-400",
-      label: agent || "Agent",
-    }
-  );
-}
-
 export function StepPanel({
   steps,
   isStreaming,
@@ -37,9 +22,23 @@ export function StepPanel({
   isStreaming: boolean;
   crewInfo?: { name: string; agents: { id: number; name: string; role: string }[] } | null;
 }) {
-  const thinkingCount = steps.filter((s) => s.kind === "thinking").length;
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const bottomRef = useRef<HTMLDivElement>(null);
+
+  const thinkingCount = steps.filter((s) => s.kind === "thinking" || s.kind === "thinking_streaming").length;
   const toolCalls = steps.filter((s) => s.kind === "tool_call");
   const toolDone = toolCalls.filter((s) => !s.pending).length;
+
+  // 流式过程中自动滚到底部（仅当用户已在底部时）
+  useEffect(() => {
+    if (!isStreaming) return;
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    if (atBottom) {
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+    }
+  }, [steps, isStreaming]);
 
   return (
     <div className="flex h-full flex-col">
@@ -61,7 +60,7 @@ export function StepPanel({
       </div>
 
       {/* 面板内容 */}
-      <div className="flex-1 overflow-y-auto px-3 py-2">
+      <div ref={scrollRef} className="flex-1 overflow-y-auto px-3 py-2">
         {steps.length === 0 ? (
           /* 空状态 */
           <div className="flex h-full flex-col items-center justify-center gap-3 py-8 text-center">
@@ -102,11 +101,12 @@ export function StepPanel({
               const isLatest =
                 isStreaming &&
                 i === steps.length - 1 &&
-                (s.kind === "thinking" || s.pending);
+                (s.kind === "thinking" || s.kind === "thinking_streaming" || s.pending);
               return (
                 <StepCard key={s.id} step={s} isLatest={isLatest} />
               );
             })}
+            <div ref={bottomRef} />
           </div>
         )}
       </div>
@@ -121,7 +121,7 @@ function StepCard({ step, isLatest }: { step: CollabStep; isLatest?: boolean }) 
 
   if (step.kind === "tool_call") {
     return (
-      <div className={`rounded-lg border-l-2 ${style.color} bg-sakura-50/60 pl-3 pr-2 py-1.5${breathClass}`}>
+      <div className={`rounded-lg border-l-2 ${style.border} bg-sakura-50/60 pl-3 pr-2 py-1.5${breathClass}`}>
         <div className="flex items-center gap-1.5">
           {step.pending ? (
             <Loader2 size={12} className="animate-spin text-sakura-400" />
@@ -148,7 +148,7 @@ function StepCard({ step, isLatest }: { step: CollabStep; isLatest?: boolean }) 
 
   if (step.kind === "tool_result") {
     return (
-      <div className={`rounded-lg border-l-2 ${style.color} bg-sakura-50/60 pl-3 pr-2 py-1.5${breathClass}`}>
+      <div className={`rounded-lg border-l-2 ${style.border} bg-sakura-50/60 pl-3 pr-2 py-1.5${breathClass}`}>
         <div className="flex items-center gap-1.5">
           <CheckCircle size={12} className="text-emerald-500" />
           <span className="text-xs font-medium">{style.label}</span>
@@ -165,16 +165,24 @@ function StepCard({ step, isLatest }: { step: CollabStep; isLatest?: boolean }) 
     );
   }
 
-  // thinking — manager 决策用 Crown 图标 + 高亮背景
+  // thinking / thinking_streaming — manager 决策用 Crown 图标 + 高亮背景
   if (isManager) {
     return (
       <div className={`rounded-lg border-l-[3px] border-sakura-500 bg-sakura-100/80 pl-3 pr-2 py-1.5${breathClass}`}>
         <div className="flex items-center gap-1.5">
           <Crown size={13} className="text-sakura-600" />
           <span className="text-xs font-semibold text-sakura-700">{style.label}</span>
-          <span className="text-[10px] text-sakura-400">决策</span>
+          <span className="text-[10px] text-sakura-400">
+            {step.kind === "thinking_streaming" ? "思考中..." : "决策"}
+          </span>
           {step.step != null && (
             <span className="text-[10px] text-sakura-400">Step {step.step}</span>
+          )}
+          {step.kind === "thinking_streaming" && (
+            <span className="ml-auto flex items-center gap-0.5 text-[10px] text-sakura-400 animate-pulse">
+              <Loader2 size={10} className="animate-spin" />
+              流式
+            </span>
           )}
         </div>
         <div className="mt-0.5 text-[11px] text-sakura-600 line-clamp-4">
@@ -184,14 +192,20 @@ function StepCard({ step, isLatest }: { step: CollabStep; isLatest?: boolean }) 
     );
   }
 
-  // sub-agent thinking
+  // sub-agent thinking / thinking_streaming
   return (
-    <div className={`rounded-lg border-l-2 ${style.color} bg-sakura-50/60 pl-3 pr-2 py-1.5${breathClass}`}>
+    <div className={`rounded-lg border-l-2 ${style.border} bg-sakura-50/60 pl-3 pr-2 py-1.5${breathClass}`}>
       <div className="flex items-center gap-1.5">
         <Search size={12} className="text-sakura-400" />
         <span className="text-xs font-medium">{style.label}</span>
+        {step.kind === "thinking_streaming" && (
+          <span className="text-[10px] text-sakura-400 animate-pulse">思考中</span>
+        )}
         {step.step != null && (
           <span className="text-[10px] text-zinc-400">Step {step.step}</span>
+        )}
+        {step.kind === "thinking_streaming" && (
+          <Loader2 size={10} className="ml-auto animate-spin text-sakura-400" />
         )}
       </div>
       <div className="mt-0.5 text-[11px] text-zinc-500 line-clamp-4">

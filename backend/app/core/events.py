@@ -6,6 +6,7 @@ SSE 事件协议：
 
 事件类型：
     agent_thinking      - Agent 思考步骤（content=思考文本, agent=Agent角色, step=序号）
+    thinking_token      - Agent 思考 streaming token（content=单个/少量 token, agent=角色, step=序号）
     tool_call           - 工具调用开始（agent, tool, input）
     tool_result         - 工具调用结束（agent, tool, output）
     approval_requested  - HITL 审批请求（agent, tool, input含approval_id/action/risk_level）

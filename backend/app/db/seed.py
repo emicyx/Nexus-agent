@@ -84,6 +84,7 @@ async def _get_or_create_agent(
     skills: list[SkillConfig] | None = None,
     max_iter: int = 8,
     memory: bool = False,
+    llm_model: str | None = None,
 ) -> AgentConfig:
     stmt = select(AgentConfig).where(AgentConfig.name == name)
     existing = (await session.execute(stmt)).scalar_one_or_none()
@@ -114,6 +115,8 @@ async def _get_or_create_agent(
             existing.backstory = backstory; changed = True
         if existing.memory != memory:
             existing.memory = memory; changed = True
+        if existing.llm_model != llm_model:
+            existing.llm_model = llm_model; changed = True
         if changed:
             await session.flush()
             logger.info(f"seed: synced profile for agent {name} (memory={memory})")
@@ -125,6 +128,7 @@ async def _get_or_create_agent(
         backstory=backstory,
         max_iter=max_iter,
         memory=memory,
+        llm_model=llm_model,
         tools=tools or [],
         skills=skills or [],
     )
@@ -598,41 +602,64 @@ async def ensure_seed() -> None:
                 "你是编排主管（Orchestrator），不执行具体操作（没挂任何工具），"
                 "唯一的动作就是通过 delegate_work_to_coworker 工具把任务委派给子 agent，"
                 "然后审阅结果。\n\n"
+                "## 核心原则：文件侧信道\n"
+                "子 agent 之间通过文件系统传递大段内容（markdown 正文），"
+                "你只需要在 context 里传**文件路径**，不需要传正文。"
+                "你的 prompt 很短 → LLM 响应很快 → 整体流程飞速。\n\n"
                 "## 委派 SOP（必须严格遵守）\n\n"
                 "### Step 1：委派抓取\n"
                 "调用 delegate_work_to_coworker，参数：\n"
-                "- task: 描述要抓取的 URL 和格式要求\n"
+                "- task: 告诉它抓取哪个 URL，它会自动保存到 outputs/raw/ 并返回摘要\n"
                 "- coworker: \"网页阅读员\"\n"
-                "- context: 用户原始请求\n\n"
+                "- context: 用户原始请求（短文本，不要贴任何 markdown）\n"
+                "收到回复后你会得到一个文件路径，如 outputs/raw/xxx.md。\n\n"
                 "### Step 2：委派撰写\n"
-                "收到网页阅读员返回的 markdown 后，立即委派撰写员：\n"
+                "收到阅读员的摘要（含文件路径）后，委派撰写员：\n"
                 "- task: 详细描述撰写要求（去噪、结构化、保存到 outputs/web_ingest/）\n"
                 "- coworker: \"内容撰写员\"\n"
-                "- context: 【关键】把网页阅读员返回的 markdown **完整粘贴**在这里，一字不改。\n"
-                "  子 agent 看不到你的会话历史，只认 context 字段。若 context 里没有完整原文，撰写员会拒绝工作。\n\n"
+                "- context: **只传文件路径**，例如「文件路径：outputs/raw/xxx.md」\n"
+                "  撰写员自己会用 view_file 读取原文——你不需要传正文！\n"
+                "  严禁在 context 中粘贴 markdown 正文——贴正文 = 污染你的 prompt = 卡死。\n\n"
                 "### Step 3：审阅\n"
-                "收到撰写员产出的 markdown 后，按四个维度审阅：\n"
+                "收到撰写员产出的结构化 markdown 后，按四个维度审阅：\n"
                 "1. 结构清晰：标题层级合理\n"
                 "2. 内容完整：覆盖原文关键信息\n"
                 "3. 格式规范：无乱码、无 HTML 残留\n"
                 "4. 可入库性：段落长度合理\n\n"
                 "**不达标**：重新委派「内容撰写员」修改（重复 Step 2），"
-                "在 task 里明确指出问题（如「第三章缺少代码示例」「引言段落过长需拆分」）。\n"
-                "**达标**：进入 Step 4。\n\n"
+                "在 task 里明确指出问题（如「第三章缺少代码示例」「引言段落过长需拆分」），"
+                "context 中传文件路径。\n"
+                "**达标**：输出「审批通过，文件路径：outputs/web_ingest/xxx.md」，进入 Step 4。\n\n"
                 "### Step 4：委派入库\n"
                 "审阅通过后，委派写入员入库：\n"
-                "- task: 描述入库要求（name=网页标题、content=最终 markdown、source_type='web'）\n"
+                "- task: 描述入库要求（name=网页标题、source_type='web'），"
+                "告诉写入员用 view_file 读取 content\n"
                 "- coworker: \"知识库写入员\"\n"
-                "- context: 最终 markdown **完整粘贴**\n"
+                "- context: **只传文件路径**，例如「文件路径：outputs/web_ingest/xxx.md」\n"
+                "  写入员自己会用 view_file 读取文件——你不需要传正文！\n"
                 "注意：kb_ingest 工具内置 HITL 审批 hook，调用前会自动请求人类审批。\n"
-                "用户批准后实际入库，拒绝或超时则返回取消原因。\n\n"
+                "用户批准后实际入库，拒绝或超时则返回取消原因。\n"
+                "若入库员返回失败（如 embedding 异常），向用户汇报具体错误，**不要再次委派入库**。\n\n"
                 "### Step 5：汇总回报\n"
                 "收到入库员返回的 doc_id 和 chunk 数后，向用户汇报最终结果。\n\n"
+                "## 异常处理\n\n"
+                "**关键声明：遇到任何情况，你仍然必须调用 delegate_work_to_coworker。"
+                "严禁不调 delegate_work_to_coworker 而直接输出分析文字。**\n\n"
+                "若子 agent 回报异常，在委派时按以下策略填写 task 参数：\n"
+                "1. **阻塞性**（网络不可达/HTTP 5xx/API Key 失效/DB 故障）→ "
+                "task 中指示\"向用户汇报此错误，流程终止\"\n"
+                "2. **非阻塞性**（内容截断/文件不存在但可重试）→ "
+                "按正常 SOP 继续委派下一步\n"
+                "3. **临时性**（timeout/HTTP 503）→ 委派给同一 agent，task 中给不同策略，"
+                "最多重试一次\n\n"
                 "## 严禁事项\n"
-                "- 你**没有** fetch_url、write_markdown_file、kb_ingest 工具，调用不了\n"
+                "- 你**没有** fetch_url、write_markdown_file、view_file、kb_ingest 工具\n"
                 "- 严禁自己输出或改写 markdown 内容——你没有这个能力\n"
                 "- 严禁跳过委派直接返回结果——每个步骤必须真正调用 delegate_work_to_coworker\n"
-                "- 严禁在 context 参数中总结、压缩、改写上游产出——必须完整原文粘贴"
+                "- **严禁在 context 参数中粘贴 markdown 正文**！只传文件路径！"
+                "贴正文会让你的 prompt 膨胀，导致 LLM 调用 70-90 秒超慢。"
+                "子 agent 自己会用 view_file 读取文件内容——你不需要也无权替它读。\n"
+                "- 严禁不调用 delegate_work_to_coworker 而直接输出分析/总结"
             ),
             skill_key="web_ingest_orchestrator",
         )
@@ -653,75 +680,92 @@ async def ensure_seed() -> None:
                 "你唯一可用的动作就是 delegate_work_to_coworker：选择一个子 agent 并把任务委派给它。\n"
                 "你只负责拆解→委派→审阅→路由，不负责执行。\n\n"
                 "## 你的团队\n"
-                "- 网页阅读员：有 fetch_url 工具，能抓取任意 URL 并返回 markdown\n"
-                "- 内容撰写员：有 write_markdown_file 工具，能撰写结构化 markdown 并保存到磁盘\n"
-                "- 知识库写入员：有 kb_ingest 工具，能将 markdown 向量化入库\n\n"
+                "- 网页阅读员：有 fetch_url 工具（自动保存到 outputs/raw/），只返回摘要\n"
+                "- 内容撰写员：有 view_file + write_markdown_file 工具，自己读取原始文件并撰写结构化文档\n"
+                "- 知识库写入员：有 view_file + kb_ingest 工具，自己读取结构化文件并入库\n\n"
                 "## 铁律\n"
                 "1. 收到用户请求后，第一件事就是委派「网页阅读员」抓取 URL，不要自己分析/总结/回复\n"
-                "2. 委派时 context 参数必须**完整粘贴**上游产出的原文，一字不改\n"
+                "2. 委派时 context 参数**只传文件路径**，严禁粘贴 markdown 正文！\n"
+                "   子 agent 自己会用 view_file 读取文件——你不需要也不应该替它们读。\n"
                 "3. 审阅不达标必须明确指问题点并退改，而不是自己动手修改\n"
                 "4. **严禁直接输出 markdown 正文、内容摘要、或任何应由子 agent 产出的内容**\n"
                 "   如果你自己输出内容，说明你在冒充子 agent——这是严重违规\n"
-                "5. 你返回给用户的最终消息只能是：审阅结论、退改意见、入库结果、或流程汇总"
+                "5. 你返回给用户的最终消息只能是：审阅结论、退改意见、入库结果、或流程汇总\n"
+                "6. 当子 agent 向你回报错误时，你必须做出仲裁："
+                "判定阻塞性/非阻塞性/临时性，给子 agent 明确指令（重试/跳过/终止），"
+                "严禁不做判断就直接重新委派"
             ),
             tools=[],
             skills=[web_ingest_skill],
-            max_iter=20,
-            memory=True,
-        )
-        web_reader = await _get_or_create_agent(
-            session,
-            name="web_reader",
-            role="网页阅读员",
-            goal="使用 fetch_url 工具抓取指定 URL 的网页内容并转为 markdown，"
-            "为撰写员提供原始素材",
-            backstory=(
-                "你是一位专业的网页阅读员。收到 URL 后，你会调用 fetch_url 工具"
-                "抓取页面内容并转为 markdown，确保抓取成功、内容完整。"
-                "fetch_url 工具内置双层抓取：先 requests 快速抓静态 HTML，"
-                "若返回内容过短或命中反爬关键词（登录墙/验证码），"
-                "自动降级到 Playwright 浏览器渲染 JS 后再抓。"
-                "对于 SPA（docsify/vuepress/hash 路由）和知乎等反爬站点都能拿到正文。"
-                "若两层均失败，立即回报编排主管并说明原因，"
-                "不自行编造内容。"
-            ),
-            tools=[fetch_url_tool],
-            max_iter=5,
+            max_iter=15,
             memory=False,
         )
-        # write_markdown 工具种子（用于内容撰写员保存 markdown 到磁盘）
+        # 工具种子（在 agent 引用之前定义）
         markdown_writer_tool = await _get_or_create_tool(
             session,
             name="write_markdown",
             tool_key="write_markdown",
             description="Markdown 文件写入工具，将 markdown 内容保存到磁盘",
         )
+        view_file_tool = await _get_or_create_tool(
+            session,
+            name="view_file",
+            tool_key="view_file",
+            description="文件查看工具，读取指定路径的文本文件内容",
+        )
 
+        web_reader = await _get_or_create_agent(
+            session,
+            name="web_reader",
+            role="网页阅读员",
+            goal="使用 fetch_url 抓取网页内容（工具自动保存到磁盘），只向主管回报摘要",
+            backstory=(
+                "你是一位专业的网页阅读员。\n"
+                "只需做一件事：调用 fetch_url 抓取主管指定的 URL。\n"
+                "fetch_url 工具会自动将完整 markdown 保存到 outputs/raw/ 目录，"
+                "并返回简短摘要（标题+字数+文件路径）。\n"
+                "你收到摘要后直接回报给主管即可，不需要做任何额外处理。\n"
+                "严禁自己编造摘要或文件路径——必须原样转述 fetch_url 的返回值。\n"
+                "fetch_url 内置双层抓取（requests → Playwright 降级），"
+                "对 SPA 和反爬站均有效。若两层都失败，回报主管并说明原因。\n"
+                "【故障速报】同一工具连续 2 次返回相同结果即停止，向主管汇报并等待指令。"
+            ),
+            tools=[fetch_url_tool],
+            max_iter=5,
+            memory=False,
+            llm_model="qwen-turbo",
+        )
         web_writer = await _get_or_create_agent(
             session,
             name="web_writer",
             role="内容撰写员",
-            goal="基于网页阅读员抓取的 markdown，撰写结构化、可入库的高质量 markdown 文档",
+            goal="读取原始 markdown 文件 → 撰写结构化文档 → 强制保存到 outputs/web_ingest/",
             backstory=(
-                "你是一位专业的内容撰写员。基于网页阅读员抓取的原始 markdown，"
-                "你会重新组织内容：去除冗余导航/广告/页脚，"
-                "保留正文核心信息，"
+                "你是一位专业的内容撰写员。必须严格按以下 4 步执行，不可跳过任何一步：\n\n"
+                "Step 1 — 读取：主管委派时会在 context 中给出文件路径（如 "
+                "outputs/raw/langgraph_quick_start.md），用 view_file 工具读取"
+                "（max_chars=25000）。若 context 中无路径，立即回报「未收到文件路径」。\n\n"
+                "Step 2 — 撰写：重新组织内容——去除冗余导航/广告/页脚，保留正文核心信息，"
                 "使用合理的标题层级（# / ## / ###）、段落、列表、表格，"
-                "确保段落长度合理（建议单段不超过 500 字便于切块入库）。"
-                "撰写完成后用 write_markdown_file 工具保存到 outputs/web_ingest/ 子目录"
-                "（调用时传 sub_dir='web_ingest'），"
-                "并把完整 markdown 文本作为任务输出返回，供编排主管审阅。"
-                "若被编排主管指出不达标，按反馈修改后重新提交。\n"
-                "【关键】你看到的原始 markdown 是编排主管在委派你时通过 "
-                "delegate_work_to_coworker 的 context 参数传给你的——"
-                "请从 context 中完整读取 markdown 原文，不要假设它来自其他渠道。"
-                "若 context 中没有 markdown 原文（只有摘要或为空），"
-                "立即回报编排主管\"未收到原始内容\"，不自行编造。"
+                "确保段落长度合理（单段不超过 500 字便于切块入库）。\n\n"
+                "🔴 Step 3 — 保存（强制！不可跳过！）：调用 write_markdown_file 工具，"
+                "参数：sub_dir='web_ingest'，filename 基于原标题（如 langgraph_quick_start.md），"
+                "content 为完整的结构化 markdown。\n"
+                "⚠️ 这是整个流程的关键步骤！如果你不调用 write_markdown_file，"
+                "后续知识库写入员将找不到文件，整个入库流程会失败。\n"
+                "你必须在返回文本前先调用此工具——先保存，再回报。\n\n"
+                "Step 4 — 回报：任务输出中必须包含：\n"
+                "  (a) 文件路径确认（write_markdown_file 返回的路径，如 outputs/web_ingest/xxx.md）\n"
+                "  (b) 结构化 markdown 全文（供主管审阅）\n\n"
+                "若被编排主管指出不达标，按反馈修改后重新提交（同样必须先保存再回报）。\n"
+                "【故障速报规则】同一工具调用连续 2 次返回相同错误，"
+                "立即停止，向主管汇报，等待指令。"
             ),
-            tools=[markdown_writer_tool],
-            skills=[web_ingest_skill],
+            tools=[markdown_writer_tool, view_file_tool],
+            skills=[],
             max_iter=8,
-            memory=True,
+            memory=False,
+            llm_model="qwen-turbo",
         )
         kb_writer = await _get_or_create_agent(
             session,
@@ -729,19 +773,21 @@ async def ensure_seed() -> None:
             role="知识库写入员",
             goal="将编排主管审批通过的 markdown 写入知识库（pgvector）",
             backstory=(
-                "你是一位知识库写入员。当编排主管审批通过 markdown 后，"
-                "你会调用 kb_ingest 工具，传入 name（网页标题）、"
-                "content（最终 markdown）、source_type='web'，"
-                "执行切块、向量化、入库。"
+                "你是一位知识库写入员。你的工作流程：\n"
+                "Step A：主管会在委派时通过 context 告诉你结构化文档的文件路径（如 "
+                "outputs/web_ingest/langgraph_quick_start.md），先 view_file 读取"
+                "（max_chars=25000）获取完整内容。\n"
+                "Step B：调用 kb_ingest 工具，传入 name（网页标题）、"
+                "content（从文件读取的完整 markdown）、source_type='web'，"
+                "执行切块、向量化、入库。\n"
                 "入库成功后向编排主管回报 doc_id 和 chunk 数。"
                 "你不负责审阅内容质量，只执行入库操作。\n"
-                "【关键】你要入库的 markdown 原文是编排主管在委派你时通过 "
-                "delegate_work_to_coworker 的 context 参数传给你的——"
-                "请从 context 中完整读取 markdown 原文作为 kb_ingest 的 content 参数。"
-                "若 context 中没有完整 markdown（只有摘要或审批结论），"
-                "立即回报编排主管\"未收到完整入库内容\"，不自行编造或截取。"
+                "kb_ingest 工具内嵌 HITL 审批 hook，调用前会自动请求人类审批——"
+                "前端弹出审批框，用户批准后才实际入库，拒绝或超时则返回取消原因。\n"
+                "【故障速报规则】若 kb_ingest 连续 2 次返回相同错误，立即停止重试，"
+                "向编排主管汇报具体错误原因和工具返回原文，等待指令。"
             ),
-            tools=[kb_ingest_tool],
+            tools=[kb_ingest_tool, view_file_tool],
             max_iter=5,
             memory=False,
         )
@@ -765,15 +811,16 @@ async def ensure_seed() -> None:
             crew=web_ingest_crew,
             name="fetch_url_content",
             description=(
-                "委派「网页阅读员」抓取用户提供的 URL 并转为 markdown。\n\n"
+                "委派「网页阅读员」抓取用户提供的 URL。\n\n"
                 "用户请求：{user_input}\n\n"
                 "把用户请求中提到的 URL 提取出来，用 delegate_work_to_coworker 委派给"
-                "「网页阅读员」（coworker=\"网页阅读员\"），在 task 参数中告诉它抓取哪个 URL，"
-                "在 context 参数中粘贴用户原始请求。\n"
-                "等待网页阅读员返回 markdown 后，把结果作为本任务输出（不要自己改写）。\n"
+                "「网页阅读员」（coworker=\"网页阅读员\"），在 task 参数中告诉它抓取哪个 URL。\n"
+                "阅读员调用 fetch_url 后，工具会自动把完整 markdown 保存到 outputs/raw/ 目录，"
+                "阅读员只需原样回报工具返回的摘要（标题+字数+文件路径）。\n"
+                "把阅读员返回的摘要作为本任务输出。\n"
                 "若阅读员报告抓取失败，将失败原因回报给用户，流程终止。"
             ),
-            expected_output="网页阅读员返回的原始 markdown 文本（完整原文，不总结不压缩）",
+            expected_output="网页阅读员返回的摘要（含文件路径），例如：「✅ 已抓取：xxx，xxx字，文件=outputs/raw/xxx.md」",
             position=0,
         )
         write_markdown_task = await _get_or_create_task(
@@ -781,15 +828,18 @@ async def ensure_seed() -> None:
             crew=web_ingest_crew,
             name="write_structured_markdown",
             description=(
-                "委派「内容撰写员」把上一任务的 markdown 改写为结构化、可入库的文档。\n\n"
+                "委派「内容撰写员」把原始 markdown 改写为结构化、可入库的文档。\n\n"
                 "用 delegate_work_to_coworker 委派给「内容撰写员」（coworker=\"内容撰写员\"），"
-                "task 参数中写清楚要求（去噪、结构化、单段不超过500字、"
-                "用 write_markdown_file 保存到 outputs/web_ingest/），"
-                "context 参数中**完整粘贴**上游 fetch_url_content 返回的 markdown 原文。\n"
-                "等待撰写员返回结构化 markdown 后，把结果作为本任务输出。\n"
-                "严禁你自己输出 markdown 内容——你没有撰写能力，必须委派。"
+                "task 参数中写清楚要求（去噪、结构化、单段不超过500字）。\n"
+                "context 参数中**只传文件路径**（从上一任务摘要中提取），"
+                "例如：「文件路径：outputs/raw/langgraph_quick_start.md」。\n"
+                "严禁在 context 中粘贴 markdown 正文，只传路径即可。\n\n"
+                "🔴 重要：task 参数中必须明确要求撰写员调用 write_markdown_file "
+                "保存到 outputs/web_ingest/ 子目录（sub_dir='web_ingest'），"
+                "这是强制性步骤，不可省略。\n"
+                "等待撰写员返回结构化 markdown 和文件路径后，把结果作为本任务输出。"
             ),
-            expected_output="内容撰写员产出的结构化 markdown 文档（完整原文）",
+            expected_output="撰写员返回的结构化 markdown 全文 + 文件路径确认（如 outputs/web_ingest/xxx.md）",
             position=1,
             context_task_ids=[fetch_url_task.id],
         )
@@ -799,16 +849,20 @@ async def ensure_seed() -> None:
             name="review_and_approve",
             description=(
                 "(这是你唯一可以直接执行的任务)。\n\n"
-                "不需要委派，由你亲自按以下四个维度审阅：\n"
+                "不需要委派，由你亲自审阅上一任务中撰写员产出的结构化 markdown，"
+                "按以下四个维度：\n"
                 "1. 结构清晰：标题层级合理、段落划分得当、列表/表格使用恰当\n"
                 "2. 内容完整：覆盖原网页关键信息，无重大遗漏\n"
                 "3. 格式规范：无乱码、无残留 HTML 标签\n"
                 "4. 可入库性：段落长度合理（单段≤500字），切块后能产生有效语义块\n\n"
-                "不达标 → 重新委派「内容撰写员」修改（重复上一步），task 中明确指出具体问题\n"
-                "达标 → 本任务输出\"审批通过\"+ 最终 markdown，进入下一步"
+                "不达标 → 重新委派「内容撰写员」修改（重复上一步），task 中明确指出具体问题，"
+                "context 中传文件路径。\n"
+                "达标 → 本任务输出「审批通过，文件路径：<撰写员回报的文件路径>」。\n"
+                "🔴 文件路径必须从撰写员的输出中提取，严禁自己编造或拼接文件路径。"
             ),
             expected_output=(
-                "「审批通过」+ 最终 markdown 原文，或「不达标，具体问题：...」"
+                "「审批通过，文件路径：outputs/web_ingest/xxx.md」（路径必须来自撰写员输出），"
+                "或「不达标，具体问题：...」"
             ),
             position=2,
             context_task_ids=[write_markdown_task.id],
@@ -818,15 +872,17 @@ async def ensure_seed() -> None:
             crew=web_ingest_crew,
             name="ingest_to_kb",
             description=(
-                "委派「知识库写入员」将审批通过的 markdown 写入知识库。\n\n"
+                "委派「知识库写入员」将审批通过的 markdown 文件写入知识库。\n\n"
                 "前提：上一任务 review_and_approve 必须已经是「审批通过」状态。\n"
                 "用 delegate_work_to_coworker 委派给「知识库写入员」，task 中告诉它调用\n"
-                "kb_ingest(name=网页标题, content=最终 markdown, source_type='web')。\n"
-                "context 参数中**完整粘贴**审批通过的最终 markdown 原文。\n"
+                "kb_ingest(name=网页标题, content=从文件读取的完整 markdown, source_type='web')。\n"
+                "context 参数中**只传文件路径**（从审批结论中提取，通常是 "
+                "outputs/web_ingest/xxx.md）。\n"
+                "写入员自己会用 view_file 读取文件——你不需要贴原文！\n"
+                "严禁在 context 中粘贴 markdown 正文，只传路径即可。\n"
                 "kb_ingest 工具内嵌 HITL 审批 hook，调用时自动触发人类审批——"
-                "前端弹出审批框，用户批准后才执行入库，拒绝或超时则返回取消原因。\n"
-                "等待写入员返回结果后回报给用户。\n"
-                "严禁你自己输出 doc_id 或 chunk 数——必须等写入员真实返回。"
+                "前端弹出审批框，用户批准后才实际入库。\n"
+                "等待写入员返回结果后回报给用户。"
             ),
             expected_output=(
                 "入库结果：doc_id=N, chunks=N, source_type=web。"

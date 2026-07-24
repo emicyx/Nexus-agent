@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useRef, useEffect, useCallback } from "react";
-import { useChat } from "@/hooks/use-chat";
+import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useChat, type CollabStep } from "@/hooks/use-chat";
 import { MessageList } from "@/components/chat/message-list";
 import { StepPanel } from "@/components/chat/step-panel";
 import { AppShell } from "@/components/app-shell";
+import { agentStyle } from "@/lib/agent-style";
 import {
   listCrews,
   listChatSessions,
@@ -12,7 +13,7 @@ import {
   type CrewRead,
   type ChatSessionRead,
 } from "@/lib/api-client";
-import { Send, Square, Plus, Users, GitBranch, MessageCircle, Trash2, History } from "lucide-react";
+import { Send, Square, Plus, Users, GitBranch, MessageCircle, Trash2, History, Loader2 } from "lucide-react";
 
 export default function ChatPage() {
   const [crews, setCrews] = useState<CrewRead[]>([]);
@@ -237,6 +238,25 @@ export default function ChatPage() {
     </div>
   );
 
+  // 活跃 Agent 状态：从最后一个 pending/streaming step 推导
+  const activeAgent = useMemo(() => {
+    if (!isStreaming || steps.length === 0) return null;
+    // 找最后一个 thinking_streaming 或 pending tool_call
+    for (let i = steps.length - 1; i >= 0; i--) {
+      const s = steps[i];
+      if (s.kind === "thinking_streaming") {
+        return { agent: s.agent, step: s.step, status: "思考中" };
+      }
+      if (s.kind === "tool_call" && s.pending) {
+        return { agent: s.agent, step: s.step, status: `正在调用 ${s.tool || "工具"}` };
+      }
+      if (s.kind === "thinking") {
+        return { agent: s.agent, step: s.step, status: "思考完成" };
+      }
+    }
+    return null;
+  }, [steps, isStreaming]);
+
   // 右栏内容
   const rightPanel = (
     <StepPanel steps={steps} isStreaming={isStreaming} crewInfo={crewInfo} />
@@ -256,6 +276,19 @@ export default function ChatPage() {
             onExampleClick={(text) => send(text)}
           />
         </div>
+
+        {/* 活跃 Agent 状态条 */}
+        {activeAgent && (
+          <div className="flex items-center gap-2 border-t border-sakura-100 bg-sakura-50/50 px-4 py-1.5">
+            <Loader2 size={12} className="animate-spin text-sakura-400" />
+            <span className="text-xs text-sakura-500">
+              {agentStyle(activeAgent.agent ?? undefined).icon}{" "}
+              {activeAgent.agent || "Agent"}
+              {activeAgent.step != null && ` · Step ${activeAgent.step}`}
+            </span>
+            <span className="text-xs text-sakura-300">· {activeAgent.status}</span>
+          </div>
+        )}
 
         {/* 错误提示 */}
         {error && (

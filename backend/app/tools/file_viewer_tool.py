@@ -29,6 +29,10 @@ class FileViewerInput(BaseModel):
             "例如：'outputs/hello.py' 或 '/app/data/outputs/report.docx'"
         ),
     )
+    max_chars: int = Field(
+        8000,
+        description="最大返回字符数，默认 8000。读取大文件时可设置更大值（如 25000）",
+    )
 
 
 class FileViewerTool(BaseTool):
@@ -41,7 +45,7 @@ class FileViewerTool(BaseTool):
     )
     args_schema: type[BaseModel] = FileViewerInput
 
-    def _run(self, file_path: str = "", **kwargs: Any) -> str:
+    def _run(self, file_path: str = "", max_chars: int = 8000, **kwargs: Any) -> str:
         if not file_path:
             return "错误：file_path 不能为空"
 
@@ -67,7 +71,7 @@ class FileViewerTool(BaseTool):
             logger.exception("file_viewer_error")
             return f"读取文件失败: {e}"
 
-        return truncate(text)
+        return truncate(text, max_chars=max_chars)
 
 
 def _read_docx(path: Path) -> str:

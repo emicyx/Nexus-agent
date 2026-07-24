@@ -1,4 +1,4 @@
-"""URL 抓取工具：获取网页 HTML 并转为 markdown。
+"""URL 抓取工具：获取网页 HTML 并转为 markdown，自动保存到磁盘。
 
 双层抓取策略：
   path A: requests + html2text（快路径，适合静态 HTML）
@@ -9,13 +9,20 @@
   - markdown 内容过短（< _MIN_CONTENT_CHARS，疑似 SPA 空壳）
   - markdown 命中反爬关键词（疑似登录墙/验证码页）
 
+抓取成功后自动将 markdown 保存到 /app/data/outputs/raw/{slug}.md，
+只返回简短摘要（标题+字数+文件路径），不再返回全文。
+这样避免 LLM 通过 function calling 传递大段文本（qwen-turbo 对大参数
+支持有限），文件 I/O 由工具代码直接完成，确定性高。
+
 CrewAI akickoff() 在主 asyncio 事件循环中调用 _run，
 而 Playwright sync API 不能在已运行的 asyncio loop 里用，
 故 path B 必须丢到独立线程池执行（线程内无 asyncio loop 冲突）。
 """
 import concurrent.futures
 import logging
+import re
 import threading
+from pathlib import Path
 from typing import Any
 
 import requests
@@ -24,6 +31,7 @@ from html2text import HTML2Text
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.tools._file_utils import resolve_output_path
 
 logger = logging.getLogger("fetch_url")
 
@@ -34,8 +42,8 @@ _h2t.ignore_images = False
 _h2t.body_width = 0  # 不换行截断，保留原始段落结构
 _h2t.unicode_snob = True  # 保留中文等 Unicode 字符
 
-# 内容截断上限（避免 LLM 上下文爆炸）
-_MAX_CHARS = 20000
+# 文件名 slug 最大长度
+_SLUG_MAX_LEN = 60
 
 # 静态抓取的最小有效内容字数（少于此值视为疑似 SPA 空壳）
 _MIN_CONTENT_CHARS = 500
@@ -93,9 +101,11 @@ class FetchUrlTool(BaseTool):
 
     name: str = "fetch_url"
     description: str = (
-        "抓取指定 URL 的网页内容并转换为 markdown 格式。"
+        "抓取指定 URL 的网页内容并转换为 markdown 格式，自动保存到磁盘。"
         "触发时机：当需要阅读某个网页、提取网页正文内容、"
-        "为知识库入库准备 markdown 素材时使用。"
+        "为知识库入库准备 markdown 素材时使用。\n"
+        "行为：抓取成功后自动将完整 markdown 保存到 outputs/raw/{slug}.md，"
+        "只返回简短摘要（标题+字数+文件路径），不返回全文。\n"
         "适用边界：内置双层抓取——先 requests 快速抓静态 HTML，"
         "若失败/内容过短/命中反爬关键词，自动降级到 Playwright 浏览器渲染 JS 后再抓，"
         "可处理 SPA（docsify/vuepress/hash 路由）和大部分反爬站点。"
@@ -138,14 +148,15 @@ class FetchUrlTool(BaseTool):
                 len(markdown_a) >= _MIN_CONTENT_CHARS
                 and not _looks_like_anti_bot(markdown_a)
             ):
-                # 静态抓取成功
+                # 静态抓取成功 → 自动保存到磁盘，返回摘要
+                title = _extract_title(requests_html)
+                slug = _url_to_slug(url)
+                file_path = _save_markdown_to_file(markdown_a, slug)
                 logger.info(
-                    "fetch_url requests ok: %s (markdown=%d chars)",
+                    "fetch_url requests ok → saved: %s (markdown=%d chars)",
                     url, len(markdown_a),
                 )
-                return _format_result(
-                    url, _extract_title(requests_html), markdown_a, source="requests",
-                )
+                return _format_summary(url, title, len(markdown_a), file_path, source="requests")
             logger.info(
                 "fetch_url requests 返回内容过短或疑似反爬，降级 Playwright: "
                 "%s (markdown=%d chars, anti_bot=%s)",
@@ -172,11 +183,14 @@ class FetchUrlTool(BaseTool):
         markdown_b = _h2t.handle(pw_html).strip()
         if not markdown_b:
             return f"Playwright 渲染成功但转换 markdown 为空：{url}"
+        # Playwright 成功 → 自动保存到磁盘，返回摘要
+        slug = _url_to_slug(url)
+        file_path = _save_markdown_to_file(markdown_b, slug)
         logger.info(
-            "fetch_url playwright ok: %s (markdown=%d chars)",
+            "fetch_url playwright ok → saved: %s (markdown=%d chars)",
             url, len(markdown_b),
         )
-        return _format_result(url, pw_title, markdown_b, source="playwright")
+        return _format_summary(url, pw_title, len(markdown_b), file_path, source="playwright")
 
 
 def _looks_like_anti_bot(markdown: str) -> bool:
@@ -278,11 +292,44 @@ def _fetch_with_playwright_impl(url: str, selector: str) -> tuple[str, str] | No
                 pass
 
 
-def _format_result(
-    url: str, title: str, markdown: str, source: str,
+def _format_summary(
+    url: str, title: str, char_count: int, file_path: str, source: str,
 ) -> str:
-    """拼接最终返回：header + markdown，超过 _MAX_CHARS 截断。"""
-    # 清理多余空行
+    """返回简短摘要（不包含正文），供 LLM agent 消费。"""
+    return (
+        f"✅ 已抓取：{title}，{char_count}字，"
+        f"文件={file_path}，抓取方式={source}"
+    )
+
+
+def _url_to_slug(url: str) -> str:
+    """从 URL 提取文件名友好的 slug。
+
+    例：https://www.runoob.com/ai-agent/langgraph-quick-start.html
+    → langgraph-quick-start
+    """
+    # 去掉协议和域名，取路径部分
+    path = re.sub(r"^https?://[^/]+/", "", url)
+    # 去掉末尾的 .html/.htm/.php/.asp 等扩展名
+    path = re.sub(r"\.(html?|php|asp|jsp)(\?.*)?$", "", path)
+    # 去掉 query string 和 fragment
+    path = path.split("?")[0].split("#")[0]
+    # 取最后一个非空路径段
+    parts = [p for p in path.strip("/").split("/") if p]
+    slug = parts[-1] if parts else "index"
+    # 替换非字母数字为连字符
+    slug = re.sub(r"[^a-zA-Z0-9\u4e00-\u9fff_-]", "-", slug)
+    # 合并多余连字符
+    slug = re.sub(r"-{2,}", "-", slug).strip("-")
+    # 截断
+    if len(slug) > _SLUG_MAX_LEN:
+        slug = slug[:_SLUG_MAX_LEN].rstrip("-")
+    return slug or "page"
+
+
+def _save_markdown_to_file(markdown: str, slug: str) -> str:
+    """保存 markdown 到 outputs/raw/{slug}.md，返回相对路径。"""
+    # 清理多余空行（保留输出质量）
     lines = [ln.rstrip() for ln in markdown.splitlines()]
     cleaned: list[str] = []
     blank_streak = 0
@@ -294,23 +341,16 @@ def _format_result(
         else:
             blank_streak = 0
             cleaned.append(ln)
-    markdown = "\n".join(cleaned).strip()
+    content = "\n".join(cleaned).strip()
 
-    # 截断
-    truncated = False
-    if len(markdown) > _MAX_CHARS:
-        markdown = markdown[:_MAX_CHARS] + "\n\n[... 内容已截断（超过 20000 字）...]"
-        truncated = True
-
-    header = f"URL: {url}\n标题: {title}\n字数: {len(markdown)}\n抓取方式: {source}"
-    if truncated:
-        header += "（已截断）"
-    return f"{header}\n\n---\n\n{markdown}"
+    file_path = resolve_output_path(f"{slug}.md", sub_dir="raw")
+    file_path.write_text(content, encoding="utf-8")
+    # 返回相对于 /app/data/ 的路径（和其他工具保持一致）
+    return f"outputs/raw/{slug}.md"
 
 
 def _extract_title(html: str) -> str:
     """从 HTML 中提取 <title>。"""
-    import re
     m = re.search(r"<title[^>]*>(.*?)</title>", html, re.IGNORECASE | re.DOTALL)
     if m:
         return m.group(1).strip()[:200]

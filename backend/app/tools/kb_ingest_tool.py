@@ -13,6 +13,7 @@
 import json
 import logging
 import os
+import time
 from typing import Any
 
 import requests
@@ -46,7 +47,7 @@ def _get_sync_session() -> Session:
 def _embed_texts_sync(texts: list[str]) -> list[list[float]]:
     """同步批量调用 DashScope embedding API。
 
-    DashScope /v1/embeddings 接口单次最多 25 条输入，超出时自动分批。
+    DashScope text-embedding-v3 原生 API 单次最多 6 条输入，超出时自动分批。
     """
     api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
     if not api_key:
@@ -56,7 +57,8 @@ def _embed_texts_sync(texts: list[str]) -> list[list[float]]:
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json",
     }
-    batch_size = 25
+    # DashScope 原生限制 6 条/次，用 6 确保不超限（兼容模式也可能受限）
+    batch_size = 6
     all_embeddings: list[list[float]] = []
     for i in range(0, len(texts), batch_size):
         batch = texts[i : i + batch_size]
@@ -67,6 +69,12 @@ def _embed_texts_sync(texts: list[str]) -> list[list[float]]:
             "encoding_format": "float",
         }
         r = requests.post(url, json=payload, headers=headers, timeout=60)
+        if not r.ok:
+            # 记录完整响应体，便于诊断 400 错误的具体原因
+            logger.error(
+                "embedding_api_error status=%s batch=%d/%d body=%s",
+                r.status_code, i // batch_size + 1, -(-len(texts) // batch_size), r.text[:500],
+            )
         r.raise_for_status()
         data = r.json()["data"]
         # DashScope 返回按 input 顺序排列
@@ -185,6 +193,7 @@ class KbIngestTool(BaseTool):
             source_type = "web"
 
         # 切块
+        t0 = time.perf_counter()
         try:
             chunks = _split_chunks(content)
         except Exception as e:
@@ -193,13 +202,23 @@ class KbIngestTool(BaseTool):
 
         if not chunks:
             return "错误：内容为空，无法切块入库"
+        logger.info(
+            "kb_ingest split_chunks: chars=%d, chunks=%d, took=%.3fs",
+            len(content), len(chunks), time.perf_counter() - t0,
+        )
 
         # 批量嵌入
+        t1 = time.perf_counter()
         try:
             embeddings = _embed_texts_sync(chunks)
         except Exception as e:
             logger.exception("embed_failed")
             return f"向量化失败：{e}"
+        logger.info(
+            "kb_ingest embed: chunks=%d, dim=%d, batch_count=%d, took=%.3fs",
+            len(chunks), len(embeddings[0]) if embeddings else 0,
+            -(-len(chunks) // 6), time.perf_counter() - t1,
+        )
 
         if len(embeddings) != len(chunks):
             return (
@@ -208,6 +227,7 @@ class KbIngestTool(BaseTool):
             )
 
         # 同步写库
+        t2 = time.perf_counter()
         try:
             with _get_sync_session() as session:
                 # 插入文档
@@ -244,8 +264,10 @@ class KbIngestTool(BaseTool):
                     )
                 session.commit()
                 logger.info(
-                    "kb_ingest_ok: doc_id=%s chunks=%d dim=%d",
+                    "kb_ingest_ok: doc_id=%s chunks=%d dim=%d db_took=%.3fs total_took=%.3fs",
                     doc_id, len(chunks), len(embeddings[0]),
+                    time.perf_counter() - t2,
+                    time.perf_counter() - t0,
                 )
                 return (
                     f"已入库：doc_id={doc_id}，"

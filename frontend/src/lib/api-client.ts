@@ -1,5 +1,6 @@
 export type ChatEvent =
   | { type: "agent_thinking"; content: string; step: number; agent?: string }
+  | { type: "thinking_token"; content: string; step?: number; agent?: string }
   | { type: "tool_call"; agent: string; tool: string; input?: string }
   | { type: "tool_result"; agent: string; tool: string; output?: string }
   | {

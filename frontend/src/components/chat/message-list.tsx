@@ -1,26 +1,7 @@
 import { type Message, type Approval, type CollabStep } from "@/hooks/use-chat";
+import { agentStyle } from "@/lib/agent-style";
 import { Brain, User, Sparkles, Send, Loader2, Cpu } from "lucide-react";
 import { ApprovalList } from "./approval-card";
-
-function agentStyle(agent?: string) {
-  const styles: Record<string, { color: string; icon: string; label: string }> = {
-    研究员: { color: "text-emerald-600", icon: "🔍", label: "研究员" },
-    撰稿人: { color: "text-sky-600", icon: "✍️", label: "撰稿人" },
-    内容编排主管: { color: "text-sakura-600", icon: "👑", label: "编排主管" },
-    网页阅读员: { color: "text-violet-600", icon: "🌐", label: "网页阅读员" },
-    内容撰写员: { color: "text-sky-600", icon: "✍️", label: "内容撰写员" },
-    知识库写入员: { color: "text-amber-600", icon: "📦", label: "知识库写入员" },
-    安全操作员: { color: "text-red-600", icon: "🛡️", label: "安全操作员" },
-    Crew: { color: "text-amber-600", icon: "⚙️", label: "Crew" },
-  };
-  return (
-    styles[agent || ""] || {
-      color: "text-sakura-600",
-      icon: "🧠",
-      label: agent || "Agent",
-    }
-  );
-}
 
 export function MessageList({
   messages,
@@ -42,7 +23,7 @@ export function MessageList({
     return <EmptyState onExampleClick={onExampleClick} />;
   }
 
-  const lastThinking = steps.filter((s) => s.kind === "thinking").pop();
+  const lastThinking = steps.filter((s) => s.kind === "thinking" || s.kind === "thinking_streaming").pop();
 
   return (
     <div className="flex-1 overflow-y-auto space-y-3 px-4 py-4">

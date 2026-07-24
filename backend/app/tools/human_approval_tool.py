@@ -25,8 +25,8 @@ from app.db.redis import (
 
 logger = logging.getLogger("hitl")
 
-# 默认超时（秒）：前端 120s 超时，工具 150s 兜底（留 30s 缓冲）
-DEFAULT_TIMEOUT = 150
+# 默认超时（秒）：前端 120s 超时，工具 60s 兜底（给用户足够但不夸张的决策时间）
+DEFAULT_TIMEOUT = 60
 POLL_INTERVAL = 1.0
 
 

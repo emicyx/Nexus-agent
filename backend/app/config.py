@@ -54,5 +54,9 @@ class Settings(BaseSettings):
     # 关闭方法：设 FETCH_URL_PLAYWRIGHT_FALLBACK=false（仅用 requests，失败直接报错）
     FETCH_URL_PLAYWRIGHT_FALLBACK: bool = True
 
+    # 流式 LLM + tool_calls 支持（使有工具的 agent 也能实时推送思考 token）
+    # 关闭方法：设 STREAMING_WITH_TOOLS_ENABLED=false（回退到不流式）
+    STREAMING_WITH_TOOLS_ENABLED: bool = True
+
 
 settings = Settings()

@@ -56,14 +56,34 @@ def _make_step_callback(
     queue: "asyncio.Queue[AgentEvent | None]",
     loop: asyncio.AbstractEventLoop,
     agent_names: list[str] | None = None,
+    manager_role: str | None = None,
 ):
     """CrewAI step_callback：将 Agent 思考步骤推入 Queue。
 
     agent_names 按 Task 执行顺序排列的 agent 角色名。
     sequential 模式下，检测 AgentFinish 自动切换到下一个 agent。
+    manager_role: hierarchical 模式下 manager 的角色名，其思考不路由到助手回答。
+
+    同时设置 LLM 流式上下文，让 AliyunLLM.call() 在非 function-calling
+    模式下将每个 token 实时推送为 thinking_token SSE 事件。
+    route_to_answer=True 时（非 manager agent），同时推送 token 事件到助手气泡。
     """
     step_counter = {"n": 0}
     current_idx = {"n": 0}
+
+    # 初始化流式上下文：CrewAI 在 thread pool 线程中运行，contextvars 自动继承
+    from app.llm.aliyun_llm import _StreamContext, _stream_ctx
+    initial_role = agent_names[0] if agent_names else "Agent"
+    # 非 manager agent 的 token 同时路由到助手回答气泡
+    is_manager = manager_role is not None and initial_role == manager_role
+    ctx = _StreamContext(
+        queue=queue,
+        loop=loop,
+        agent_role=initial_role,
+        step_n=1,  # 从 1 开始，与首次 step_callback 的 step_counter["n"] 对齐
+        route_to_answer=not is_manager,
+    )
+    _stream_ctx.set(ctx)
 
     def callback(partial_output):
         step_counter["n"] += 1
@@ -75,6 +95,12 @@ def _make_step_callback(
             agent_role = agent_names[idx]
         else:
             agent_role = _guess_agent_from_output(text)
+
+        # 更新流式上下文：下一次 LLM 调用时生效（当前 callback 在 LLM 完成后才触发）
+        ctx.agent_role = agent_role
+        ctx.step_n = step_counter["n"] + 1
+        # 非 manager agent 的 token 路由到助手气泡
+        ctx.route_to_answer = not (manager_role is not None and agent_role == manager_role)
 
         evt = AgentEvent(
             type="agent_thinking",
@@ -89,6 +115,11 @@ def _make_step_callback(
             text_head = text[:80]
             if "AgentFinish" in text_head or hasattr(partial_output, "return_values"):
                 current_idx["n"] += 1
+                # 流式上下文跟随切换到下一个 agent，同步更新 route_to_answer
+                next_idx = min(current_idx["n"], len(agent_names) - 1)
+                next_role = agent_names[next_idx]
+                ctx.agent_role = next_role
+                ctx.route_to_answer = not (manager_role is not None and next_role == manager_role)
 
     return callback
 
@@ -201,6 +232,18 @@ async def build_crew_from_db(
 
     llm = get_llm()
 
+    def _get_agent_llm(acfg_llm_model: str | None) -> AliyunLLM:
+        """返回 agent 专用 LLM 实例，优先使用 acfg.llm_model，None 时用默认单例。"""
+        if not acfg_llm_model or acfg_llm_model == settings.LLM_MODEL:
+            return llm
+        return AliyunLLM(
+            model=acfg_llm_model,
+            api_key=settings.QWEN_API_KEY,
+            region=settings.LLM_REGION,
+            temperature=settings.LLM_TEMPERATURE,
+            timeout=settings.LLM_TIMEOUT,
+        )
+
     # 构造 Agent 实例（id → Agent 映射，供 Task 引用）
     agent_map: dict[int, Agent] = {}
     t_agent_start = time.perf_counter()
@@ -267,7 +310,7 @@ async def build_crew_from_db(
             role=acfg.role,
             goal=acfg.goal,
             backstory=backstory,
-            llm=llm,
+            llm=_get_agent_llm(acfg.llm_model),
             verbose=True,
             max_iter=acfg.max_iter,
             memory=acfg.memory,
@@ -301,7 +344,7 @@ async def build_crew_from_db(
             role=mgr_cfg.role,
             goal=mgr_cfg.goal,
             backstory=mgr_backstory,
-            llm=llm,
+            llm=_get_agent_llm(mgr_cfg.llm_model),
             verbose=True,
             max_iter=mgr_cfg.max_iter,
             memory=mgr_cfg.memory,
@@ -365,7 +408,10 @@ async def build_crew_from_db(
         tasks=tasks,
         process=process,
         verbose=True,
-        step_callback=_make_step_callback(queue, loop, callback_agent_names),
+        step_callback=_make_step_callback(
+            queue, loop, callback_agent_names,
+            manager_role=manager_agent.role if is_hierarchical and manager_agent else None,
+        ),
         task_callback=_make_task_callback(queue, loop),
     )
     if is_hierarchical and manager_agent:
@@ -991,13 +1037,7 @@ async def run_crew_chat(
         except Exception as e:
             logger.warning(f"extract memories submit failed: {e}")
 
-    # 最终回答分块推送为 token 事件
-    chunk_size = 10
-    for i in range(0, len(final_text), chunk_size):
-        chunk = final_text[i : i + chunk_size]
-        await queue.put(AgentEvent(type="token", content=chunk))
-        await asyncio.sleep(0.03)
-
+    # 推送最终回答（CrewAI 已提取干净的 Final Answer，替换流式 token 中的 ReAct 格式内容）
     await queue.put(AgentEvent(type="final_answer", content=final_text))
     return final_text
 
@@ -1039,11 +1079,6 @@ async def run_single_agent_chat(
     result = await crew.kickoff_async()
     final_text = str(result.raw) if hasattr(result, "raw") else str(result)
 
-    chunk_size = 10
-    for i in range(0, len(final_text), chunk_size):
-        chunk = final_text[i : i + chunk_size]
-        await queue.put(AgentEvent(type="token", content=chunk))
-        await asyncio.sleep(0.03)
-
+    # 推送最终回答
     await queue.put(AgentEvent(type="final_answer", content=final_text))
     return final_text

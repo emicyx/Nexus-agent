@@ -47,10 +47,10 @@ export interface Message {
   content: string;
 }
 
-/** 协作步骤：可以是 Agent 思考、工具调用或工具结果 */
+/** 协作步骤：可以是 Agent 思考、流式思考 token、工具调用或工具结果 */
 export interface CollabStep {
   id: number;
-  kind: "thinking" | "tool_call" | "tool_result";
+  kind: "thinking" | "thinking_streaming" | "tool_call" | "tool_result";
   agent?: string;
   content: string;
   tool?: string;
@@ -151,12 +151,53 @@ export function useChat(crewId?: number | null) {
       })) {
         switch (evt.type) {
           case "agent_thinking":
+            // 如果之前有同 agent+step 的流式 thinking，将其标记为完成
+            for (let i = collab.length - 1; i >= 0; i--) {
+              if (
+                collab[i].kind === "thinking_streaming" &&
+                collab[i].agent === evt.agent &&
+                collab[i].step === evt.step
+              ) {
+                collab[i].kind = "thinking";
+                break;
+              }
+            }
+            // 整块 thinking 作为最终版本入库
             pushStep({
               kind: "thinking",
               agent: evt.agent,
               content: evt.content,
               step: evt.step,
             });
+            break;
+          case "thinking_token":
+            // 流式 token：找到同 agent+step 的 thinking_streaming step，追加 token
+            {
+              const lastStreaming = (() => {
+                for (let i = collab.length - 1; i >= 0; i--) {
+                  if (
+                    collab[i].kind === "thinking_streaming" &&
+                    collab[i].agent === evt.agent &&
+                    collab[i].step === evt.step
+                  ) {
+                    return collab[i];
+                  }
+                }
+                return null;
+              })();
+              if (lastStreaming) {
+                lastStreaming.content += evt.content;
+                setSteps([...collab]);
+              } else {
+                pushStep({
+                  kind: "thinking_streaming",
+                  agent: evt.agent,
+                  content: evt.content,
+                  step: evt.step,
+                  pending: true,
+                });
+              }
+            }
             break;
           case "tool_call":
             pushStep({
@@ -269,9 +310,9 @@ export function useChat(crewId?: number | null) {
     setTimeout(() => send(lastMessageRef.current), 50);
   }, [isStreaming, send]);
 
-  /** 最新的 agent_thinking 步骤（供 MessageList 实时展示思考过程）。 */
+  /** 最新的思考步骤（流式或完整，供 MessageList 实时展示）。 */
   const latestThinking = useMemo(
-    () => steps.filter((s) => s.kind === "thinking").pop() ?? null,
+    () => steps.filter((s) => s.kind === "thinking" || s.kind === "thinking_streaming").pop() ?? null,
     [steps],
   );
 

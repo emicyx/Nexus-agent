@@ -20,11 +20,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
+import contextvars
 import json
 import logging
 import os
 import re
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -50,6 +52,43 @@ def _get_logger():
 
 
 logger = _get_logger()
+
+
+@dataclass
+class _StreamContext:
+    """流式上下文：由 factory.py 的 step_callback 设置，AliyunLLM.call() 读取。
+
+    每个 HTTP 请求有独立的 asyncio Task → 独立的 context → 互不干扰。
+    """
+    queue: Any            # asyncio.Queue[AgentEvent | None]
+    loop: Any             # asyncio.AbstractEventLoop
+    agent_role: str
+    step_n: int
+    route_to_answer: bool = False  # True 时同时推送 token 事件（助手气泡实时流式）
+
+    def on_token(self, token: str) -> None:
+        """推送 thinking_token + 可选 token 事件到 SSE 队列（线程安全）。"""
+        from app.core.events import AgentEvent
+        try:
+            self.loop.call_soon_threadsafe(
+                self.queue.put_nowait,
+                AgentEvent(
+                    type="thinking_token",
+                    content=token,
+                    agent=self.agent_role,
+                    step=self.step_n,
+                ),
+            )
+            if self.route_to_answer:
+                self.loop.call_soon_threadsafe(
+                    self.queue.put_nowait,
+                    AgentEvent(type="token", content=token),
+                )
+        except RuntimeError:
+            pass  # loop 已关闭，丢弃事件
+
+
+_stream_ctx: contextvars.ContextVar = contextvars.ContextVar('_stream_ctx', default=None)
 
 
 class AliyunLLM(BaseLLM):
@@ -271,9 +310,84 @@ class AliyunLLM(BaseLLM):
                     except Exception:
                         pass
 
-        logger.info("发送 LLM API 请求 endpoint=%s model=%s", self.endpoint, payload.get("model"))
-        if logger.isEnabledFor(logging.DEBUG):
-            logger.debug("发送 LLM API 请求 payload=%s", json.dumps(payload, ensure_ascii=False, indent=2))
+        # 流式路径：有 stream context 时走流式（包括有 tool_calls 的情况）
+        # 多模态模型 (flag=True) 可能不支持流式 tool_calls，安全降级到非流式
+        from app.config import settings as app_settings
+        stream_ctx = _stream_ctx.get()
+        result: dict[str, Any] | None = None
+        content: str | None = None
+
+        if stream_ctx is not None and app_settings.STREAMING_WITH_TOOLS_ENABLED and not flag:
+            session = self._get_session()
+            stream_result = self._call_streaming(payload, session, stream_ctx)
+            if isinstance(stream_result, dict):
+                # 含 tool_calls → 与非流式路径共享 _process_response
+                result = stream_result
+            else:
+                # 纯文本，token 已全部流式推送
+                content = stream_result
+        else:
+            result = self._do_call(payload)
+            logger.info("收到 LLM API 响应  result=%s", result)
+
+        # 统一触发 on_llm_end 回调
+        if result is not None:
+            if callbacks:
+                for cb in callbacks:
+                    if hasattr(cb, "on_llm_end"):
+                        try:
+                            cb.on_llm_end(result)
+                        except Exception:
+                            pass
+            content = self._process_response(result, messages, tools, available_functions, max_iterations)
+            if not isinstance(content, str):
+                # tool_calls 列表或 _handle_function_calls 递归结果
+                return content
+        else:
+            # 纯文本流式路径：content 已设置，构造回调数据
+            if callbacks:
+                for cb in callbacks:
+                    if hasattr(cb, "on_llm_end"):
+                        try:
+                            cb.on_llm_end({"choices": [{"message": {"content": content}}]})
+                        except Exception:
+                            pass
+
+        if content is None or (isinstance(content, str) and not content.strip()):
+            if _retry_on_empty:
+                max_empty_retries = 2
+                empty_retry_count = kwargs.get("_empty_retry_count", 0)
+                if empty_retry_count >= max_empty_retries:
+                    raise ValueError(
+                        f"LLM 连续 {max_empty_retries + 1} 次返回空内容，可能是模型限流或异常，请稍后重试或检查 API 配额"
+                    )
+                logger.warning(
+                    "llm_empty_content_retry model=%s retry_count=%s max_retries=%s",
+                    self.model,
+                    empty_retry_count + 1,
+                    max_empty_retries,
+                )
+                return self.call(
+                    messages,
+                    tools=tools,
+                    callbacks=callbacks,
+                    available_functions=available_functions,
+                    max_iterations=max_iterations,
+                    _retry_on_empty=False,
+                    _empty_retry_count=empty_retry_count + 1,
+                    **kwargs,
+                )
+            raise ValueError(
+                "LLM 返回空内容，可能是模型限流或偶发异常，请稍后重试或检查 API 配额"
+            )
+
+        return content
+
+    def _do_call(
+        self,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """非流式 HTTP 请求（含重试、错误处理），返回原始 result dict。"""
         last_exception: BaseException | None = None
         result: dict[str, Any] = {}
         _t_llm0 = time.perf_counter()
@@ -337,9 +451,21 @@ class AliyunLLM(BaseLLM):
                     attempt + 1,
                     status_code,
                 )
+                # 打印百炼返回的限流 quota 信息（帮助诊断 TPM/RPM 瓶颈）
+                rl_rem_req = response.headers.get("X-RateLimit-Remaining-Requests")
+                rl_rem_tok = response.headers.get("X-RateLimit-Remaining-Tokens")
+                if rl_rem_req is not None or rl_rem_tok is not None:
+                    logger.info(
+                        "llm rate-limit headers: remaining_requests=%s remaining_tokens=%s "
+                        "reset_requests=%s reset_tokens=%s",
+                        rl_rem_req or "N/A",
+                        rl_rem_tok or "N/A",
+                        response.headers.get("X-RateLimit-Reset-Requests", "N/A"),
+                        response.headers.get("X-RateLimit-Reset-Tokens", "N/A"),
+                    )
                 if logger.isEnabledFor(logging.DEBUG):
                     logger.debug("Response result: %s", json.dumps(result, ensure_ascii=False, indent=2))
-                break
+                return result
 
             except requests.Timeout:
                 last_exception = TimeoutError(f"LLM 请求超时（{self.timeout} 秒）")
@@ -369,19 +495,23 @@ class AliyunLLM(BaseLLM):
                     continue
                 logger.exception("llm_request_failed error=%s total_attempts=%s", str(e), self.retry_count + 1)
                 raise last_exception
-        else:
-            if last_exception:
-                raise last_exception
-            raise RuntimeError("LLM 请求失败：未知错误")
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("LLM 请求失败：未知错误")
+    
+    def _process_response(
+        self,
+        result: dict[str, Any],
+        messages: list[dict[str, Any]],
+        tools: list[dict] | None,
+        available_functions: dict[str, Any] | None,
+        max_iterations: int,
+    ) -> str | Any:
+        """解析 LLM 响应 dict：提取 tool_calls 或 content。
 
-        if callbacks:
-            for cb in callbacks:
-                if hasattr(cb, "on_llm_end"):
-                    try:
-                        cb.on_llm_end(result)
-                    except Exception:
-                        pass
-        logger.info("收到 LLM API 响应  result=%s",  result)
+        共享路径 — 流式（含 tool_calls）和非流式均使用本方法处理 result dict。
+        返回 str（文本内容）或 tool_calls 列表（或 _handle_function_calls 的递归结果）。
+        """
         if "choices" not in result or not result["choices"]:
             raise ValueError("响应中未找到 choices 字段")
 
@@ -397,8 +527,6 @@ class AliyunLLM(BaseLLM):
                 )
             # CrewAI 会故意传 available_functions=None，让 LLM 只返回原始 tool_calls，
             # 由 executor 的 _handle_native_tool_calls 执行。此处直接返回 tool_calls 列表。
-            # 规范化 arguments：DashScope 要求 function.arguments 必须是合法 JSON 字符串，
-            # 模型可能返回空串或纯文本，CrewAI 回填到 messages 后会导致下一轮 400。
             for tc in message["tool_calls"]:
                 fn = tc.get("function")
                 if fn and isinstance(fn.get("arguments"), str):
@@ -413,37 +541,8 @@ class AliyunLLM(BaseLLM):
         content = message.get("content")
         if content is None:
             raise ValueError("响应中未找到 content 字段")
-
-        if isinstance(content, str) and not content.strip():
-            if _retry_on_empty:
-                max_empty_retries = 2
-                empty_retry_count = kwargs.get("_empty_retry_count", 0)
-                if empty_retry_count >= max_empty_retries:
-                    raise ValueError(
-                        f"LLM 连续 {max_empty_retries + 1} 次返回空内容，可能是模型限流或异常，请稍后重试或检查 API 配额"
-                    )
-                logger.warning(
-                    "llm_empty_content_retry model=%s retry_count=%s max_retries=%s",
-                    self.model,
-                    empty_retry_count + 1,
-                    max_empty_retries,
-                )
-                return self.call(
-                    messages,
-                    tools=tools,
-                    callbacks=callbacks,
-                    available_functions=available_functions,
-                    max_iterations=max_iterations,
-                    _retry_on_empty=False,
-                    _empty_retry_count=empty_retry_count + 1,
-                    **kwargs,
-                )
-            raise ValueError(
-                "LLM 返回空内容，可能是模型限流或偶发异常，请稍后重试或检查 API 配额"
-            )
-
         return content
-    
+
     def _handle_function_calls(
         self,
         tool_calls: list[dict],
@@ -568,6 +667,201 @@ class AliyunLLM(BaseLLM):
             elif "content" not in msg and msg.get("tool_calls") is None:
                 raise ValueError(f"消息 {i} 缺少 content 且无 tool_calls: {msg}")
             
+
+    def _call_streaming(
+        self,
+        payload: dict[str, Any],
+        session: requests.Session,
+        ctx: _StreamContext,
+    ) -> str | dict[str, Any]:
+        """流式调用 LLM API，支持 tool_calls 累积 + 文本 token 实时推送。
+
+        DashScope SSE 流式 tool_calls 格式：
+            data: {"choices":[{"delta":{"content":"思考"},"finish_reason":null}]}
+            data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_xx",
+                   "type":"function","function":{"name":"search","arguments":""}}]},...}]}
+            data: {"choices":[{"delta":{"tool_calls":[{"index":0,
+                   "function":{"arguments":"{\\"query\\""}}]},"finish_reason":null}]}
+            data: {"choices":[{"delta":{"tool_calls":[{"index":0,
+                   "function":{"arguments":":"天气"}"}}]},"finish_reason":null}]}
+            data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}
+
+        关键特征：
+        - delta.content 和 delta.tool_calls 互斥（同一 chunk 不会同时出现）
+        - tool_calls arguments 可能跨多个 chunk
+        - finish_reason="tool_calls" 表示工具调用完成，"stop" 表示纯文本完成
+
+        返回:
+        - str: 纯文本响应（无 tool_calls，token 已全部流式推送）
+        - dict: 含 tool_calls 的完整响应（与 _do_call 返回格式一致）
+        """
+        t0 = time.perf_counter()
+        full_text = ""
+        tool_calls_acc: dict[int, dict[str, Any]] = {}
+        has_tool_calls = False
+
+        try:
+            resp = session.post(
+                self.endpoint,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json",
+                    "Accept": "text/event-stream",
+                },
+                json={**payload, "stream": True},
+                timeout=(30, self.timeout),  # (connect_timeout, read_timeout)
+                stream=True,
+            )
+            if resp.status_code != 200:
+                logger.warning(
+                    "streaming request returned %d, falling back to non-streaming: %s",
+                    resp.status_code,
+                    resp.text[:200],
+                )
+                return self._fallback_call(payload)
+        except requests.Timeout:
+            logger.warning("streaming request timed out, falling back to non-streaming")
+            return self._fallback_call(payload)
+        except requests.RequestException as e:
+            logger.warning("streaming request failed: %s, falling back to non-streaming", e)
+            return self._fallback_call(payload)
+
+        try:
+            for line in resp.iter_lines(decode_unicode=True):
+                if not line:
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data_str = line[5:].strip()
+                if data_str == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data_str)
+                except json.JSONDecodeError:
+                    continue
+                choices = chunk.get("choices", [])
+                if not choices:
+                    continue
+                delta = choices[0].get("delta", {})
+                finish_reason = choices[0].get("finish_reason")
+
+                # ① 处理 tool_calls delta（与 content 互斥）
+                tool_calls_delta = delta.get("tool_calls")
+                if tool_calls_delta:
+                    has_tool_calls = True
+                    for tc in tool_calls_delta:
+                        idx = tc.get("index", 0)
+                        if idx not in tool_calls_acc:
+                            tool_calls_acc[idx] = {
+                                "id": "",
+                                "type": "function",
+                                "function": {"name": "", "arguments": ""},
+                            }
+                        entry = tool_calls_acc[idx]
+                        if tc.get("id"):
+                            entry["id"] = tc["id"]
+                        if tc.get("type"):
+                            entry["type"] = tc["type"]
+                        fn = tc.get("function", {})
+                        if fn.get("name"):
+                            entry["function"]["name"] += fn["name"]
+                        if fn.get("arguments"):
+                            entry["function"]["arguments"] += fn["arguments"]
+                    # 检测到 tool_calls 后停止流式推送文本 token
+                    continue
+
+                # ② 处理 delta.content — 仅在未出现 tool_calls 时流式推送
+                content = delta.get("content", "")
+                if content:
+                    full_text += content
+                    if not has_tool_calls:
+                        ctx.on_token(content)
+
+                if finish_reason:
+                    break
+        except Exception as e:
+            logger.warning("streaming parse error: %s, partial_text=%d chars", e, len(full_text))
+            if full_text.strip():
+                logger.info(
+                    "timing: llm.call streaming (partial) %.3fs (model=%s, chars=%d)",
+                    time.perf_counter() - t0,
+                    payload.get("model"),
+                    len(full_text),
+                )
+                return full_text
+            return self._fallback_call(payload)
+
+        # 有 tool_calls → 返回与 _do_call 格式一致的 dict
+        if has_tool_calls and tool_calls_acc:
+            sorted_tool_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())]
+            logger.info(
+                "timing: llm.call streaming+tool_calls %.3fs (model=%s, text_chars=%d, tool_calls=%d)",
+                time.perf_counter() - t0,
+                payload.get("model"),
+                len(full_text),
+                len(sorted_tool_calls),
+            )
+            return {
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": full_text.strip() or None,
+                        "tool_calls": sorted_tool_calls,
+                    },
+                    "finish_reason": "tool_calls",
+                }]
+            }
+
+        # 纯文本路径
+        logger.info(
+            "timing: llm.call streaming %.3fs (model=%s, chars=%d)",
+            time.perf_counter() - t0,
+            payload.get("model"),
+            len(full_text),
+        )
+        if not full_text.strip():
+            return self._fallback_call(payload)
+        return full_text
+
+    def _fallback_call(self, payload: dict[str, Any]) -> str | dict[str, Any]:
+        """非流式 fallback：单次请求返回完整响应。返回 str 或含 tool_calls 的 dict。"""
+        t0 = time.perf_counter()
+        session = self._get_session()
+        for attempt in range(self.retry_count + 1):
+            try:
+                resp = session.post(
+                    self.endpoint,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                if resp.status_code != 200:
+                    if attempt < self.retry_count:
+                        continue
+                    resp.raise_for_status()
+                result = resp.json()
+                logger.info(
+                    "timing: llm.call non-streaming %.3fs (model=%s)",
+                    time.perf_counter() - t0,
+                    payload.get("model"),
+                )
+                choices = result.get("choices", [])
+                if choices:
+                    message = choices[0].get("message", {})
+                    # 含 tool_calls 时返回完整 dict，供 _process_response 处理
+                    if "tool_calls" in message:
+                        return result
+                    return message.get("content", "") or ""
+                return ""
+            except (requests.Timeout, requests.RequestException):
+                if attempt >= self.retry_count:
+                    raise
+                continue
+        raise RuntimeError("LLM non-streaming 请求失败")
 
     def _prepare_stop_words(
         self, stop: str | list[str | int]

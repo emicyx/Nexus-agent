@@ -72,7 +72,7 @@ export function AppShell({ leftPanel, rightPanel, children }: AppShellProps) {
 
         {/* 右栏 */}
         {rightPanel && (
-          <aside className="hidden w-80 flex-shrink-0 flex-col border-l border-sakura-200 bg-white/80 lg:flex">
+          <aside className="hidden w-56 md:w-64 lg:w-80 flex-shrink-0 flex-col border-l border-sakura-200 bg-white/80 md:flex">
             {rightPanel}
           </aside>
         )}
