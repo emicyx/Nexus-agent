@@ -3,6 +3,7 @@ from app.models.association import AgentSkill, AgentTool, CrewAgent
 from app.models.agent import AgentConfig
 from app.models.base import Base, TimestampMixin
 from app.models.chat import ChatMessage, ChatSession
+from app.models.chat_session_summary import ChatSessionSummary
 from app.models.crew import CrewConfig
 from app.models.document import DocumentChunk, DocumentConfig
 from app.models.skill import SkillConfig
@@ -26,6 +27,7 @@ __all__ = [
     "DocumentChunk",
     "ChatSession",
     "ChatMessage",
+    "ChatSessionSummary",
     "UserMemory",
     "OutputSchemaConfig",
 ]

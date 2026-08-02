@@ -369,7 +369,8 @@ async def ensure_seed() -> None:
             ),
             tools=[search_tool, intermediate_tool, rag_tool],
             max_iter=8,
-            memory=True,
+            # Week 15: 项目自带三层记忆，CrewAI 内置记忆默认关闭（由 CREWAI_NATIVE_MEMORY_ENABLED 总开关控制）
+            memory=False,
         )
         writer = await _get_or_create_agent(
             session,
@@ -382,7 +383,8 @@ async def ensure_seed() -> None:
             ),
             skills=[code_review_skill],
             max_iter=6,
-            memory=True,
+            # Week 15: 项目自带三层记忆，CrewAI 内置记忆默认关闭（由 CREWAI_NATIVE_MEMORY_ENABLED 总开关控制）
+            memory=False,
         )
         # Week 4: 纯知识库问答 Agent（仅挂 RAG 工具，用于对照测试）
         kb_agent = await _get_or_create_agent(
@@ -395,6 +397,10 @@ async def ensure_seed() -> None:
                 "收到用户问题后，先用 rag_search 工具检索知识库，"
                 "再根据检索到的内容组织答案。"
                 "若知识库无相关内容，明确告知用户而非编造。"
+                "对'是否/能不能/支持吗/有没有'等状态类问题，必须区分时态："
+                "只有检索内容明确表述为'已实现/当前具备'时才作肯定回答；"
+                "若检索内容写的是'未来演进方向/规划中/待实现/暂不考虑'，"
+                "应如实回答为'尚未实现/属未来规划方向'，绝不能把未来规划当作已实现的能力。"
             ),
             tools=[rag_tool],
             max_iter=6,
@@ -486,7 +492,10 @@ async def ensure_seed() -> None:
                 "1. 先调用 rag_search 工具检索知识库\n"
                 "2. 仅依据检索到的内容作答，不得编造\n"
                 "3. 若知识库无相关内容，明确说明\n"
-                "4. 用中文回答"
+                "4. 用中文回答\n"
+                "5. 对'是否/能不能/支持吗/有没有'等状态类问题，区分时态："
+                "检索内容若为'未来演进方向/规划中/待实现'，回答'尚未实现/属规划方向'，"
+                "不得当作已实现的能力"
             ),
             expected_output="基于知识库的准确回答，或明确告知知识库无相关内容",
             position=0,

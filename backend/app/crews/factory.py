@@ -22,6 +22,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.events import AgentEvent
+from app.crews.crewai_async_patch import apply_async_tool_patch
 from app.crews.hook_registry import instantiate_hook
 from app.crews.tool_events import wrap_tool_with_events
 from app.crews.tool_hooks import BaseToolHook, wrap_tool_with_hooks
@@ -313,7 +314,8 @@ async def build_crew_from_db(
             llm=_get_agent_llm(acfg.llm_model),
             verbose=True,
             max_iter=acfg.max_iter,
-            memory=acfg.memory,
+            # Week 15：CrewAI 内置记忆默认关闭（项目用自带三层记忆），由总开关统一控制
+            memory=acfg.memory and settings.CREWAI_NATIVE_MEMORY_ENABLED,
             tools=tools,
         )
         agent_map[acfg.id] = agent
@@ -347,7 +349,7 @@ async def build_crew_from_db(
             llm=_get_agent_llm(mgr_cfg.llm_model),
             verbose=True,
             max_iter=mgr_cfg.max_iter,
-            memory=mgr_cfg.memory,
+            memory=mgr_cfg.memory and settings.CREWAI_NATIVE_MEMORY_ENABLED,
             allow_delegation=True,
         )
 
@@ -428,30 +430,36 @@ async def build_crew_from_db(
         _apply_delegation_pydantic_patch()
 
     # Week 8: 双层记忆 — 任意 agent 启用 memory 时，Crew 级别开启 memory + embedder
+    # Week 15: 项目自带三层记忆，CrewAI 内置记忆由总开关 CREWAI_NATIVE_MEMORY_ENABLED 控制，默认关闭
     any_memory = any(acfg.memory for acfg in agents_cfg)
     if is_hierarchical and manager_agent and mgr_cfg.memory:
         any_memory = True
-    if any_memory:
+    crew_memory = settings.CREWAI_NATIVE_MEMORY_ENABLED and any_memory
+    if crew_memory:
         crew_kwargs["memory"] = True
         crew_kwargs["embedder"] = _build_embedder_config()
         # 确保 CrewAI 存储目录存在
         storage_dir = settings.CREWAI_STORAGE_DIR
         os.makedirs(storage_dir, exist_ok=True)
         os.environ.setdefault("CREWAI_STORAGE_DIR", storage_dir)
+    else:
+        # 显式关闭，避免 CrewAI 任何内置记忆（STM/LTM/Entity/External）创建
+        crew_kwargs["memory"] = False
 
     t_crew0 = time.perf_counter()
     crew_obj = Crew(**crew_kwargs)
     t_crew1 = time.perf_counter()
     logger.info(
         "timing: Crew(memory=%s) construct %.3fs (total build_crew %.3fs)",
-        any_memory, t_crew1 - t_crew0, t_crew1 - t0,
+        crew_memory, t_crew1 - t_crew0, t_crew1 - t0,
     )
 
     # Week 11 性能优化：LongTermMemory 评估控制
     # - CREWAI_LONG_TERM_MEMORY_ENABLED=True（默认）：保留 LongTermMemory，
     #   通过 _apply_ltm_async_patch() 让 TaskEvaluator 评估异步+小模型执行
     # - CREWAI_LONG_TERM_MEMORY_ENABLED=False：彻底禁用，回到 11s 无评估
-    if any_memory and not settings.CREWAI_LONG_TERM_MEMORY_ENABLED:
+    # （Week 15 起 crew_memory 默认 False，以下分支仅当 CREWAI_NATIVE_MEMORY_ENABLED=true 时可达）
+    if crew_memory and not settings.CREWAI_LONG_TERM_MEMORY_ENABLED:
         crew_obj._long_term_memory = None
         logger.info("timing: LongTermMemory disabled (CREWAI_LONG_TERM_MEMORY_ENABLED=False)")
     elif any_memory:
@@ -588,6 +596,7 @@ def _apply_ltm_async_patch() -> None:
 
 # 模块加载时自动应用 patch
 _apply_ltm_async_patch()
+apply_async_tool_patch()
 
 
 # ---------- 辅助：动态 Pydantic 模型生成 ----------
@@ -906,24 +915,42 @@ async def run_crew_chat(
         except Exception as e:
             logger.warning(f"embed_query failed (LTM/KB 检索将跳过): {e}")
 
-    # Layer 1 STM：从 DB 读取历史 → 压缩剪枝
+    # Layer 1 STM：从 DB 读取历史 → 压缩剪枝 + 滚动摘要
     if session_id:
         t_hist0 = time.perf_counter()
+        summary_text = ""
         async with AsyncSessionLocal() as db:
             from app.services.chat_service import get_session_by_uuid
             sess = await get_session_by_uuid(db, session_id)
             if sess is not None:
                 db_session_id = sess.id
+                # 滚动摘要（滑出窗口的旧消息摘要，如已生成）
+                if settings.STM_SUMMARY_ENABLED:
+                    try:
+                        from app.models import ChatSessionSummary
+                        from sqlalchemy import select as sa_select
+                        summ_row = (
+                            await db.execute(
+                                sa_select(ChatSessionSummary).where(
+                                    ChatSessionSummary.session_id == db_session_id
+                                )
+                            )
+                        ).scalar_one_or_none()
+                        if summ_row and summ_row.summary:
+                            summary_text = summ_row.summary
+                    except Exception as e:
+                        logger.warning(f"stm summary load failed: {e}")
                 # messages 已 selectin 加载，按 id 升序
                 history = [
                     {"role": m.role, "content": m.content}
                     for m in sess.messages
                 ]
-                history_context = build_history_context(history)
+                history_context = build_history_context(history, summary=summary_text)
         logger.info(
-            "timing: get_chat_history(db) %.3fs (session_uuid=%s, msgs=%d, stm_chars=%d)",
+            "timing: get_chat_history(db) %.3fs (session_uuid=%s, msgs=%d, summary_chars=%d, stm_chars=%d)",
             time.perf_counter() - t_hist0, session_id,
-            len(history) if session_id else 0, len(history_context),
+            len(history) if session_id else 0,
+            len(summary_text), len(history_context),
         )
 
     # Layer 2 LTM：语义检索用户偏好/经验
@@ -1008,11 +1035,11 @@ async def run_crew_chat(
             return _orig(partial_output)
         crew.step_callback = _wrap_cb
 
-    result = await crew.kickoff_async()
+    result = await crew.akickoff()
     t_kickoff1 = time.perf_counter()
     first_delay = (first_step_marker["t"] - t_kickoff0) if first_step_marker.get("t") else None
     logger.info(
-        "timing: crew.kickoff_async() total %.3fs (first_step_delay=%s)",
+        "timing: crew.akickoff() total %.3fs (first_step_delay=%s)",
         t_kickoff1 - t_kickoff0,
         f"{first_delay:.3f}s" if first_delay is not None else "N/A",
     )
@@ -1036,6 +1063,14 @@ async def run_crew_chat(
             extract_memories_async(crew_id, db_session_id, user_input, final_text)
         except Exception as e:
             logger.warning(f"extract memories submit failed: {e}")
+
+    # Layer 1 STM 写：后台增量滚动摘要（滑出窗口的旧消息 → qwen-turbo merge，fire-and-forget）
+    if session_id and db_session_id is not None and settings.STM_SUMMARY_ENABLED:
+        try:
+            from app.services.memory_stm import summarize_session_async
+            summarize_session_async(db_session_id)
+        except Exception as e:
+            logger.warning(f"stm summarize submit failed: {e}")
 
     # 推送最终回答（CrewAI 已提取干净的 Final Answer，替换流式 token 中的 ReAct 格式内容）
     await queue.put(AgentEvent(type="final_answer", content=final_text))
@@ -1076,7 +1111,7 @@ async def run_single_agent_chat(
         step_callback=_make_step_callback(queue, loop),
     )
 
-    result = await crew.kickoff_async()
+    result = await crew.akickoff()
     final_text = str(result.raw) if hasattr(result, "raw") else str(result)
 
     # 推送最终回答

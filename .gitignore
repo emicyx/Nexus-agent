@@ -39,7 +39,15 @@ pgdata/
 sse_output*.txt
 sse_deepseek.txt
 tmp/
+testing/
 
 # —— OS ——
 .DS_Store
 Thumbs.db
+
+# —— 构建产物 ——
+*.tsbuildinfo
+
+# —— 私人/敏感文档防护（勿推送到远端） ——
+doc/*简历*
+doc/*简明*

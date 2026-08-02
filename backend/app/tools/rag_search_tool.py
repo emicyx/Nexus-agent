@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.models import DocumentChunk, DocumentConfig
+from app.services.keyword_search import build_or_tsquery
 
 logger = logging.getLogger("rag_tool")
 
@@ -70,6 +71,8 @@ def _vec_to_sql_literal(vec: list[float]) -> str:
 
 
 # 混合检索 SQL：向量路 + 关键词路 RRF 融合
+# 注意：关键词路必须用 plainto_tsquery('chinese', :q) 生成 tsquery，
+# 不能直接把原始查询字符串传给 @@（会被隐式当作 tsquery 解析，中文+空格会报语法错误）
 _HYBRID_SQL = sa_text("""
 WITH vec AS (
     SELECT dc.id AS chunk_id, dc.content AS content, dc.position AS position,
@@ -84,12 +87,12 @@ WITH vec AS (
 kw AS (
     SELECT dc.id AS chunk_id, dc.content AS content, dc.position AS position,
            doc.name AS document_name,
-           ROW_NUMBER() OVER (ORDER BY ts_rank(dc.tsv, :tsq) DESC) AS rn
+           ROW_NUMBER() OVER (ORDER BY ts_rank(dc.tsv, to_tsquery('chinese', :tsq)) DESC) AS rn
     FROM document_chunks dc
     JOIN document_configs doc ON dc.document_id = doc.id
-    WHERE dc.tsv @@ :tsq
+    WHERE dc.tsv @@ to_tsquery('chinese', :tsq)
       AND (:doc_id IS NULL OR dc.document_id = :doc_id)
-    ORDER BY ts_rank(dc.tsv, :tsq) DESC
+    ORDER BY ts_rank(dc.tsv, to_tsquery('chinese', :tsq)) DESC
     LIMIT :pool
 )
 SELECT COALESCE(vec.chunk_id, kw.chunk_id) AS chunk_id,
@@ -114,9 +117,15 @@ def _search_sync(
     query_vec = _embed_query_sync(query)
     vec_literal = _vec_to_sql_literal(query_vec)
     with _get_sync_session() as session:
+        # 关键词 tsquery：zhparser 切词 + OR（过滤停用词），修复全 AND 零命中
+        lexemes = session.execute(
+            sa_text("SELECT lexeme FROM unnest(to_tsvector('chinese', :q))"),
+            {"q": query},
+        ).scalars().all()
+        tsq = build_or_tsquery(list(lexemes)) or "zzzz_nomatch"
         rows = session.execute(_HYBRID_SQL, {
             "query_vec": vec_literal,
-            "tsq": query,
+            "tsq": tsq,
             "doc_id": document_id,
             "pool": _RRF_POOL,
             "k": _RRF_K,

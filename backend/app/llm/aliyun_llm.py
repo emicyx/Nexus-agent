@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import httpx
 import requests
 from crewai import BaseLLM
 
@@ -89,6 +90,48 @@ class _StreamContext:
 
 
 _stream_ctx: contextvars.ContextVar = contextvars.ContextVar('_stream_ctx', default=None)
+
+
+# 模块级 httpx.AsyncClient 单例：原生异步 LLM 调用复用连接池（keep-alive）。
+_async_client: httpx.AsyncClient | None = None
+
+
+def _get_async_client() -> httpx.AsyncClient:
+    """懒创建并复用 httpx.AsyncClient（连接池 + TLS 会话复用，进程生命周期不关闭）。"""
+    global _async_client
+    if _async_client is None:
+        _async_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=30.0, read=60.0, write=30.0, pool=30.0),
+            limits=httpx.Limits(max_connections=100, max_keepalive_connections=20),
+        )
+    return _async_client
+
+
+def _sanitize_tool_calls_arguments(tool_calls: list[dict]) -> list[dict]:
+    """规范化 tool_calls：确保 function.arguments 是合法 JSON 字符串。
+
+    DashScope 会校验 arguments 必须是 JSON 格式，模型可能返回空串或纯文本。
+    同步/异步路径共用。
+    """
+    out: list[dict] = []
+    for tc in tool_calls:
+        tc_copy = dict(tc)
+        fn = dict(tc_copy.get("function", {}))
+        raw_args = fn.get("arguments", "{}")
+        if isinstance(raw_args, str):
+            try:
+                json.loads(raw_args)
+            except json.JSONDecodeError:
+                logger.warning(
+                    "function arguments not valid JSON, replacing with {}: %s",
+                    raw_args[:200],
+                )
+                fn["arguments"] = "{}"
+        else:
+            fn["arguments"] = json.dumps(raw_args, ensure_ascii=False)
+        tc_copy["function"] = fn
+        out.append(tc_copy)
+    return out
 
 
 class AliyunLLM(BaseLLM):
@@ -623,9 +666,14 @@ class AliyunLLM(BaseLLM):
         _retry_on_empty: bool = True,
         **kwargs: Any,
     ) -> str | Any:
-        """异步调用阿里云 Chat Completions API，通过线程池执行同步 call。"""
-        return await asyncio.to_thread(
-            self.call,
+        """原生异步调用阿里云 Chat Completions API（httpx.AsyncClient，不占线程）。
+
+        与同步 call 保持相同语义：多模态归一化、流式/非流式、重试、空内容重试、
+        Function Calling 递归。主路径（CrewAI async agent loop → aget_llm_response →
+        await llm.acall）走本方法；同步 call 保留供 LTM 线程 / delegation 子 agent /
+        边缘同步调用点使用。
+        """
+        return await self._acall(
             messages,
             tools=tools,
             callbacks=callbacks,
@@ -634,7 +682,504 @@ class AliyunLLM(BaseLLM):
             _retry_on_empty=_retry_on_empty,
             **kwargs,
         )
-    
+
+    async def _acall(
+        self,
+        messages: str | list[dict[str, Any]],
+        tools: list[dict] | None = None,
+        callbacks: list[Any] | None = None,
+        available_functions: dict[str, Any] | None = None,
+        max_iterations: int = 10,
+        _retry_on_empty: bool = True,
+        **kwargs: Any,
+    ) -> str | Any:
+        """异步编排器，镜像 call() 的分支与空内容重试逻辑。"""
+        if max_iterations <= 0:
+            raise RuntimeError("Function calling 达到最大迭代次数，可能存在无限循环")
+
+        if isinstance(messages, str):
+            messages = [{"role": "user", "content": messages}]
+
+        messages, flag = self._normalize_multimodal_tool_result(messages)
+        self._validate_messages(messages)
+
+        payload = self._build_payload(messages, tools, flag)
+
+        if callbacks:
+            for cb in callbacks:
+                if hasattr(cb, "on_llm_start"):
+                    try:
+                        cb.on_llm_start(messages)
+                    except Exception:
+                        pass
+
+        # 流式路径：有 stream context 时走流式（包括有 tool_calls 的情况）
+        from app.config import settings as app_settings
+        stream_ctx = _stream_ctx.get()
+        result: dict[str, Any] | None = None
+        content: str | None = None
+
+        if stream_ctx is not None and app_settings.STREAMING_WITH_TOOLS_ENABLED and not flag:
+            stream_result = await self._acall_streaming(payload, stream_ctx)
+            if isinstance(stream_result, dict):
+                result = stream_result
+            else:
+                content = stream_result
+        else:
+            result = await self._ado_call(payload)
+            logger.info("收到 LLM API 响应  result=%s", result)
+
+        if result is not None:
+            if callbacks:
+                for cb in callbacks:
+                    if hasattr(cb, "on_llm_end"):
+                        try:
+                            cb.on_llm_end(result)
+                        except Exception:
+                            pass
+            content = await self._extract_async_response(
+                result, messages, tools, available_functions, max_iterations
+            )
+            if not isinstance(content, str):
+                return content
+        else:
+            if callbacks:
+                for cb in callbacks:
+                    if hasattr(cb, "on_llm_end"):
+                        try:
+                            cb.on_llm_end({"choices": [{"message": {"content": content}}]})
+                        except Exception:
+                            pass
+
+        if content is None or (isinstance(content, str) and not content.strip()):
+            if _retry_on_empty:
+                max_empty_retries = 2
+                empty_retry_count = kwargs.get("_empty_retry_count", 0)
+                if empty_retry_count >= max_empty_retries:
+                    raise ValueError(
+                        f"LLM 连续 {max_empty_retries + 1} 次返回空内容，可能是模型限流或异常，请稍后重试或检查 API 配额"
+                    )
+                logger.warning(
+                    "llm_empty_content_retry model=%s retry_count=%s max_retries=%s",
+                    self.model,
+                    empty_retry_count + 1,
+                    max_empty_retries,
+                )
+                return await self.acall(
+                    messages,
+                    tools=tools,
+                    callbacks=callbacks,
+                    available_functions=available_functions,
+                    max_iterations=max_iterations,
+                    _retry_on_empty=False,
+                    _empty_retry_count=empty_retry_count + 1,
+                    **kwargs,
+                )
+            raise ValueError(
+                "LLM 返回空内容，可能是模型限流或偶发异常，请稍后重试或检查 API 配额"
+            )
+
+        return content
+
+    def _build_payload(
+        self,
+        messages: list[dict[str, Any]],
+        tools: list[dict] | None,
+        flag: bool,
+    ) -> dict[str, Any]:
+        """构造请求 payload（同步/异步路径共用）。"""
+        payload: dict[str, Any] = {
+            "model": self.image_model if flag else self.model,
+            "messages": messages,
+        }
+        if self.temperature is not None:
+            payload["temperature"] = self.temperature
+        if self.stop and self.supports_stop_words():
+            stop_value = self._prepare_stop_words(self.stop)
+            if stop_value:
+                payload["stop"] = stop_value
+        if tools and self.supports_function_calling():
+            payload["tools"] = tools
+        return payload
+
+    async def _extract_async_response(
+        self,
+        result: dict[str, Any],
+        messages: list[dict[str, Any]],
+        tools: list[dict] | None,
+        available_functions: dict[str, Any] | None,
+        max_iterations: int,
+    ) -> str | Any:
+        """异步版 _process_response：解析 tool_calls 或 content。"""
+        if "choices" not in result or not result["choices"]:
+            raise ValueError("响应中未找到 choices 字段")
+
+        message = result["choices"][0].get("message", {})
+        if "tool_calls" in message:
+            if available_functions:
+                return await self._ahandle_function_calls(
+                    message["tool_calls"],
+                    messages,
+                    tools,
+                    available_functions,
+                    max_iterations - 1,
+                )
+            # CrewAI 故意传 available_functions=None，由 executor 的
+            # _handle_native_tool_calls 执行；此处直接返回规范化后的 tool_calls。
+            return _sanitize_tool_calls_arguments(message["tool_calls"])
+
+        content = message.get("content")
+        if content is None:
+            raise ValueError("响应中未找到 content 字段")
+        return content
+
+    async def _ahandle_function_calls(
+        self,
+        tool_calls: list[dict],
+        messages: list[dict[str, Any]],
+        tools: list[dict] | None,
+        available_functions: dict[str, Any],
+        max_iterations: int,
+    ) -> str | Any:
+        """异步版 _handle_function_calls：工具在 worker 线程执行，递归走 acall。"""
+        if max_iterations <= 0:
+            raise RuntimeError("Function calling 达到最大迭代次数，可能存在无限循环")
+
+        sanitized_tool_calls = _sanitize_tool_calls_arguments(tool_calls)
+
+        messages.append({
+            "role": "assistant",
+            "content": None,
+            "tool_calls": sanitized_tool_calls,
+        })
+
+        for tool_call in sanitized_tool_calls:
+            fn_info = tool_call.get("function", {})
+            fn_name = fn_info.get("name")
+            tool_call_id = tool_call.get("id")
+            if not tool_call_id:
+                raise ValueError(f"tool_call 缺少 id: {tool_call}")
+
+            if fn_name in available_functions:
+                try:
+                    raw = fn_info.get("arguments", "{}")
+                    args = json.loads(raw) if isinstance(raw, str) and raw.strip() else {}
+                except json.JSONDecodeError as e:
+                    raise ValueError(f"无法解析函数参数: {e}") from e
+                try:
+                    function_result = await asyncio.to_thread(
+                        available_functions[fn_name], **args
+                    )
+                except Exception as e:
+                    function_result = f"函数执行错误: {str(e)}"
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": str(function_result),
+                })
+            else:
+                messages.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": f"函数 {fn_name} 不可用",
+                })
+
+        return await self.acall(messages, tools, None, available_functions, max_iterations - 1)
+
+    async def _ado_call(self, payload: dict[str, Any]) -> dict[str, Any]:
+        """原生异步非流式 HTTP 请求（含重试、错误处理），返回原始 result dict。"""
+        last_exception: BaseException | None = None
+        _t_llm0 = time.perf_counter()
+        client = _get_async_client()
+        timeout = httpx.Timeout(connect=30.0, read=float(self.timeout), write=30.0, pool=30.0)
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        for attempt in range(self.retry_count + 1):
+            try:
+                resp = await client.post(
+                    self.endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
+                )
+                status_code = resp.status_code
+                if status_code >= 500:
+                    if attempt < self.retry_count:
+                        logger.warning(
+                            "llm_server_error_retry status_code=%s attempt=%s max=%s",
+                            status_code,
+                            attempt + 1,
+                            self.retry_count + 1,
+                        )
+                        last_exception = RuntimeError(
+                            f"LLM 服务器错误 {status_code}: {resp.text[:200]}"
+                        )
+                        continue
+                    resp.raise_for_status()
+                elif status_code == 429:
+                    if attempt < self.retry_count:
+                        logger.warning(
+                            "llm_rate_limit_retry attempt=%s max=%s",
+                            attempt + 1,
+                            self.retry_count + 1,
+                        )
+                        last_exception = RuntimeError(f"LLM 请求限流: {resp.text[:200]}")
+                        continue
+                    resp.raise_for_status()
+                elif status_code >= 400:
+                    err_body = resp.text[:500] if resp.text else ""
+                    logger.error(
+                        "llm_request_4xx status_code=%s url=%s body=%s",
+                        status_code,
+                        resp.url,
+                        err_body,
+                    )
+                    resp.raise_for_status()
+
+                result = resp.json()
+                if attempt > 0:
+                    logger.info(
+                        "llm_request_success_after_retry attempt=%s total=%s",
+                        attempt + 1,
+                        self.retry_count + 1,
+                    )
+                logger.info(
+                    "timing: llm.acall request %.3fs (model=%s, attempt=%s, status=%s)",
+                    time.perf_counter() - _t_llm0,
+                    payload.get("model"),
+                    attempt + 1,
+                    status_code,
+                )
+                rl_rem_req = resp.headers.get("X-RateLimit-Remaining-Requests")
+                rl_rem_tok = resp.headers.get("X-RateLimit-Remaining-Tokens")
+                if rl_rem_req is not None or rl_rem_tok is not None:
+                    logger.info(
+                        "llm rate-limit headers: remaining_requests=%s remaining_tokens=%s "
+                        "reset_requests=%s reset_tokens=%s",
+                        rl_rem_req or "N/A",
+                        rl_rem_tok or "N/A",
+                        resp.headers.get("X-RateLimit-Reset-Requests", "N/A"),
+                        resp.headers.get("X-RateLimit-Reset-Tokens", "N/A"),
+                    )
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug("Response result: %s", json.dumps(result, ensure_ascii=False, indent=2))
+                return result
+
+            except httpx.TimeoutException:
+                last_exception = TimeoutError(f"LLM 请求超时（{self.timeout} 秒）")
+                if attempt < self.retry_count:
+                    logger.warning(
+                        "llm_timeout_retry timeout=%s attempt=%s max=%s",
+                        self.timeout,
+                        attempt + 1,
+                        self.retry_count + 1,
+                    )
+                    continue
+                logger.error(
+                    "llm_timeout_final timeout=%s total_attempts=%s",
+                    self.timeout,
+                    self.retry_count + 1,
+                )
+                raise last_exception
+            except httpx.RequestError as e:
+                last_exception = RuntimeError(f"LLM 请求失败: {e}")
+                if attempt < self.retry_count:
+                    logger.warning(
+                        "llm_request_error_retry error=%s attempt=%s max=%s",
+                        str(e),
+                        attempt + 1,
+                        self.retry_count + 1,
+                    )
+                    continue
+                logger.exception("llm_request_failed error=%s total_attempts=%s", str(e), self.retry_count + 1)
+                raise last_exception
+        if last_exception:
+            raise last_exception
+        raise RuntimeError("LLM 请求失败：未知错误")
+
+    async def _acall_streaming(
+        self,
+        payload: dict[str, Any],
+        ctx: _StreamContext,
+    ) -> str | dict[str, Any]:
+        """原生异步流式调用：SSE 解析 + tool_calls 累积 + 文本 token 实时推送。
+
+        DashScope SSE 格式与同步 _call_streaming 相同（delta.content 与
+        delta.tool_calls 互斥、arguments 跨 chunk 累积、finish_reason 终止）。
+        """
+        t0 = time.perf_counter()
+        full_text = ""
+        tool_calls_acc: dict[int, dict[str, Any]] = {}
+        has_tool_calls = False
+        client = _get_async_client()
+        timeout = httpx.Timeout(connect=30.0, read=float(self.timeout), write=30.0, pool=30.0)
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        }
+
+        try:
+            async with client.stream(
+                "POST",
+                self.endpoint,
+                headers=headers,
+                json={**payload, "stream": True},
+                timeout=timeout,
+            ) as resp:
+                if resp.status_code != 200:
+                    logger.warning(
+                        "streaming request returned %d, falling back to non-streaming: %s",
+                        resp.status_code,
+                        resp.text[:200],
+                    )
+                    return await self._afallback_call(payload)
+
+                async for line in resp.aiter_lines():
+                    if not line:
+                        continue
+                    if not line.startswith("data:"):
+                        continue
+                    data_str = line[5:].strip()
+                    if data_str == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data_str)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = chunk.get("choices", [])
+                    if not choices:
+                        continue
+                    delta = choices[0].get("delta", {})
+                    finish_reason = choices[0].get("finish_reason")
+
+                    # ① 处理 tool_calls delta（与 content 互斥）
+                    tool_calls_delta = delta.get("tool_calls")
+                    if tool_calls_delta:
+                        has_tool_calls = True
+                        for tc in tool_calls_delta:
+                            idx = tc.get("index", 0)
+                            if idx not in tool_calls_acc:
+                                tool_calls_acc[idx] = {
+                                    "id": "",
+                                    "type": "function",
+                                    "function": {"name": "", "arguments": ""},
+                                }
+                            entry = tool_calls_acc[idx]
+                            if tc.get("id"):
+                                entry["id"] = tc["id"]
+                            if tc.get("type"):
+                                entry["type"] = tc["type"]
+                            fn = tc.get("function", {})
+                            if fn.get("name"):
+                                entry["function"]["name"] += fn["name"]
+                            if fn.get("arguments"):
+                                entry["function"]["arguments"] += fn["arguments"]
+                        # 检测到 tool_calls 后停止流式推送文本 token
+                        continue
+
+                    # ② 处理 delta.content — 仅在未出现 tool_calls 时流式推送
+                    content = delta.get("content", "")
+                    if content:
+                        full_text += content
+                        if not has_tool_calls:
+                            ctx.on_token(content)
+
+                    if finish_reason:
+                        break
+        except httpx.TimeoutException as e:
+            logger.warning("streaming request timed out: %s, falling back to non-streaming", e)
+            return await self._afallback_call(payload)
+        except httpx.RequestError as e:
+            logger.warning("streaming request failed: %s, falling back to non-streaming", e)
+            return await self._afallback_call(payload)
+        except Exception as e:
+            logger.warning("streaming parse error: %s, partial_text=%d chars", e, len(full_text))
+            if full_text.strip():
+                logger.info(
+                    "timing: llm.acall streaming (partial) %.3fs (model=%s, chars=%d)",
+                    time.perf_counter() - t0,
+                    payload.get("model"),
+                    len(full_text),
+                )
+                return full_text
+            return await self._afallback_call(payload)
+
+        # 有 tool_calls → 返回与 _ado_call 格式一致的 dict
+        if has_tool_calls and tool_calls_acc:
+            sorted_tool_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc.keys())]
+            logger.info(
+                "timing: llm.acall streaming+tool_calls %.3fs (model=%s, text_chars=%d, tool_calls=%d)",
+                time.perf_counter() - t0,
+                payload.get("model"),
+                len(full_text),
+                len(sorted_tool_calls),
+            )
+            return {
+                "choices": [{
+                    "index": 0,
+                    "message": {
+                        "role": "assistant",
+                        "content": full_text.strip() or None,
+                        "tool_calls": sorted_tool_calls,
+                    },
+                    "finish_reason": "tool_calls",
+                }]
+            }
+
+        logger.info(
+            "timing: llm.acall streaming %.3fs (model=%s, chars=%d)",
+            time.perf_counter() - t0,
+            payload.get("model"),
+            len(full_text),
+        )
+        if not full_text.strip():
+            return await self._afallback_call(payload)
+        return full_text
+
+    async def _afallback_call(self, payload: dict[str, Any]) -> str | dict[str, Any]:
+        """原生异步非流式 fallback：单次请求返回完整响应。"""
+        t0 = time.perf_counter()
+        client = _get_async_client()
+        timeout = httpx.Timeout(connect=30.0, read=float(self.timeout), write=30.0, pool=30.0)
+        headers = {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+        }
+        for attempt in range(self.retry_count + 1):
+            try:
+                resp = await client.post(
+                    self.endpoint,
+                    headers=headers,
+                    json=payload,
+                    timeout=timeout,
+                )
+                if resp.status_code != 200:
+                    if attempt < self.retry_count:
+                        continue
+                    resp.raise_for_status()
+                result = resp.json()
+                logger.info(
+                    "timing: llm.acall non-streaming %.3fs (model=%s)",
+                    time.perf_counter() - t0,
+                    payload.get("model"),
+                )
+                choices = result.get("choices", [])
+                if choices:
+                    message = choices[0].get("message", {})
+                    # 含 tool_calls 时返回完整 dict，供 _extract_async_response 处理
+                    if "tool_calls" in message:
+                        return result
+                    return message.get("content", "") or ""
+                return ""
+            except (httpx.TimeoutException, httpx.RequestError):
+                if attempt >= self.retry_count:
+                    raise
+                continue
+        raise RuntimeError("LLM non-streaming 请求失败")
+
     def supports_function_calling(self) -> bool:
         """
         是否支持 Function Calling

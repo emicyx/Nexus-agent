@@ -3,7 +3,11 @@
 - ingest_document: 切块 + 嵌入 + 写库
 - search_documents: 向量 + 关键词 RRF 融合检索
 - list_documents / delete_document
+
+Week 2026-08: 入库切块改为「句子级 Embedding 相似度语义分块」（semantic_chunker.semantic_chunk），
+替代原 500 字硬切方案（原 _split_chunks 保留仅供单测/参考）。
 """
+import asyncio
 import logging
 from typing import Any
 
@@ -13,10 +17,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.llm.embedding import embed_query, embed_texts
 from app.models import DocumentChunk, DocumentConfig
+from app.services.keyword_search import build_or_tsquery
+from app.services.semantic_chunker import semantic_chunk
 
 logger = logging.getLogger("document_service")
 
-# 分块参数
+# 分块参数（保留旧参数供 _split_chunks 单测参考；入库实际用 semantic_chunk）
 _CHUNK_MAX_CHARS = 500
 _PARA_SEP = "\n\n"
 
@@ -27,7 +33,7 @@ _RRF_POOL = 200
 
 
 def _split_chunks(text: str) -> list[str]:
-    """按段落切块，单段超过上限时硬切。"""
+    """按段落切块，单段超过上限时硬切。（旧方案，保留供单测/参考；入库改用 semantic_chunk）"""
     if not text:
         return []
     paragraphs = [p.strip() for p in text.split(_PARA_SEP) if p.strip()]
@@ -48,8 +54,12 @@ async def ingest_document(
     content: str,
     source_type: str = "text",
 ) -> DocumentConfig:
-    """切块 + 嵌入 + 写入文档与分块。"""
-    chunks_text = _split_chunks(content)
+    """语义切块 + 嵌入 + 写入文档与分块。
+
+    语义切块（semantic_chunk）内部含同步 embedding 调用，用 asyncio.to_thread
+    放到 worker 线程执行，不阻塞事件循环。
+    """
+    chunks_text = await asyncio.to_thread(semantic_chunk, content)
     if not chunks_text:
         raise ValueError("文档内容为空，无法切块")
 
@@ -86,6 +96,20 @@ async def ingest_document(
     return doc
 
 
+async def _build_keyword_tsquery(session: AsyncSession, query: str) -> str:
+    """用 zhparser 切词 + OR 构造关键词 tsquery。
+
+    修复 plainto_tsquery('chinese', q) 把全部 token AND 导致的零命中问题：
+    过滤停用词后 OR 连接，ts_rank 按覆盖率排序。无内容词时返回永不匹配的 tsquery。
+    """
+    lexemes = (await session.execute(
+        sa_text("SELECT lexeme FROM unnest(to_tsvector('chinese', :q))"),
+        {"q": query},
+    )).scalars().all()
+    tsq = build_or_tsquery(list(lexemes))
+    return tsq or "zzzz_nomatch"
+
+
 async def search_documents(
     session: AsyncSession,
     query: str,
@@ -94,7 +118,7 @@ async def search_documents(
 ) -> list[dict[str, Any]]:
     """混合检索：向量 + 关键词 RRF 融合。
 
-    向量路用 pgvector cosine_distance，关键词路用 zhparser 中文分词 ts_rank。
+    向量路用 pgvector cosine_distance，关键词路用 zhparser 中文分词 ts_rank（OR tsquery）。
     两路各取前 _RRF_POOL 条，用 RRF(k=60) 融合后取 top_k。
 
     可选 document_id 限定检索范围。
@@ -105,7 +129,7 @@ async def search_documents(
         return []
     q = query.strip()
     query_vec = await embed_query(q)
-    tsq = func.plainto_tsquery("chinese", q)
+    tsq = func.to_tsquery("chinese", await _build_keyword_tsquery(session, q))
 
     # 向量路 CTE
     vec_dist = DocumentChunk.embedding.cosine_distance(query_vec)

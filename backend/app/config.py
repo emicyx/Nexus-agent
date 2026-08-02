@@ -38,9 +38,21 @@ class Settings(BaseSettings):
     # 默认 qwen-turbo（评估调用从 9-11s 降到 1-2s），与主回答 LLM_MODEL 隔离。
     CREWAI_EVALUATOR_LLM_MODEL: str = "qwen-turbo"
 
+    # Week 15：CrewAI 内置记忆总开关（默认关闭）。
+    # 项目使用自己搭建的三层记忆（STM/LTM/KB，见 memory_stm/memory_ltm/document_service），
+    # CrewAI 内置记忆（ShortTermMemory ChromaDB + LongTermMemory SQLite + EntityMemory）默认不启用，
+    # 避免：① TaskEvaluator LLM 评估开销；② STM 不跨请求（每请求新建 Crew 白跑）；③ 需配 embedder。
+    # 如确需开启：设 CREWAI_NATIVE_MEMORY_ENABLED=true（同时需 embedder 指向 DashScope + CREWAI_STORAGE_DIR）。
+    CREWAI_NATIVE_MEMORY_ENABLED: bool = False
+
     # 三层记忆系统开关
     # Layer 1 STM（会话内压缩）：默认开
     STM_ENABLED: bool = True
+    # Layer 1 STM 滚动摘要：滑出窗口的旧消息增量压缩为滚动摘要（后台 qwen-turbo，fire-and-forget）。
+    # 关闭方法：设 STM_SUMMARY_ENABLED=false（回到纯滑动窗口，早期上下文直接丢弃）
+    STM_SUMMARY_ENABLED: bool = True
+    STM_SUMMARY_LLM_MODEL: str = "qwen-turbo"
+    STM_SUMMARY_MAX_CHARS: int = 1200  # 摘要注入 context 的长度上限
     # Layer 2 LTM（用户偏好/经验，跨会话语义检索）：默认开
     LTM_USER_MEMORY_ENABLED: bool = True
     # LTM 提取专用 LLM（后台线程，fire-and-forget）

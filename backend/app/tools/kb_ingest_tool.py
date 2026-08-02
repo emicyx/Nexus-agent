@@ -3,7 +3,7 @@
 同步实现（参考 rag_search_tool.py 同步模式）：
 - CrewAI akickoff() 在主事件循环调用 _run，不能用 asyncio.run
 - 用同步 SQLAlchemy（psycopg2）+ 同步 requests 调 embedding API
-- 切块逻辑复用 document_service._split_chunks
+- 切块逻辑：semantic_chunker.semantic_chunk（句子级 Embedding 相似度语义分块）
 
 表结构：
 - document_configs(id, name, source_type, content_text, created_at, updated_at)
@@ -23,7 +23,7 @@ from sqlalchemy import create_engine, text as sa_text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
-from app.services.document_service import _split_chunks
+from app.services.semantic_chunker import semantic_chunk
 
 logger = logging.getLogger("kb_ingest")
 
@@ -192,13 +192,13 @@ class KbIngestTool(BaseTool):
         if source_type not in ("text", "file", "web"):
             source_type = "web"
 
-        # 切块
+        # 语义切块（句子级 + Embedding 相似度边界，内部同步嵌入）
         t0 = time.perf_counter()
         try:
-            chunks = _split_chunks(content)
+            chunks = semantic_chunk(content)
         except Exception as e:
-            logger.exception("split_chunks_failed")
-            return f"切块失败：{e}"
+            logger.exception("semantic_chunk_failed")
+            return f"语义切块失败：{e}"
 
         if not chunks:
             return "错误：内容为空，无法切块入库"

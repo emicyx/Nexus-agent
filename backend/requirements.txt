@@ -4,6 +4,7 @@ crewai-tools==1.9.3
 
 # HTTP 请求库
 requests==2.32.5
+httpx==0.28.1
 
 # 数据验证
 pydantic==2.11.10
