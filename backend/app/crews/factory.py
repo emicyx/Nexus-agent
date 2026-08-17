@@ -357,7 +357,11 @@ async def build_crew_from_db(
     task_map: dict[int, Task] = {}
     tasks: list[Task] = []
     agent_names_by_task: list[str] = []  # 按 task 执行顺序的 agent 角色名
+    # 跟踪是否至少一个 task 声明了 {user_input} 占位符（否则用户输入/STM 历史会静默丢失）
+    has_user_input_placeholder = False
     for tcfg in tasks_cfg:
+        if "{user_input}" in (tcfg.description or "") or "{user_input}" in (tcfg.expected_output or ""):
+            has_user_input_placeholder = True
         # hierarchical 模式下 agent_id 可为 None（由 manager 动态分配）
         agent = agent_map.get(tcfg.agent_id) if tcfg.agent_id else None
         if tcfg.agent_id is not None and agent is None:
@@ -395,6 +399,20 @@ async def build_crew_from_db(
         agent_names_by_task.append(agent.role if agent else (manager_agent.role if manager_agent else "Agent"))
         task_map[tcfg.id] = task
         tasks.append(task)
+
+    # 兜底：若没有任何 task 声明 {user_input}，用户消息（含 STM 历史上下文）会静默丢失，
+    # agent 将完全不知道用户问了什么（如 markdown_write 类手工配置的 crew）。
+    # 这里把 user_input 注入第一个 task 的 description，保证上下文可达。
+    if tasks and user_input.strip() and not has_user_input_placeholder:
+        _first = tasks[0]
+        logger.warning(
+            "crew=%s 的 task 均未声明 {user_input} 占位符，已兜底注入到首个 task（否则用户上下文静默丢失）",
+            crew.name,
+        )
+        _first.description = (
+            f"用户请求（含历史对话上下文）：\n{user_input}\n\n"
+            f"【任务】{_first.description}"
+        )
 
     # process 类型
     process = Process.hierarchical if is_hierarchical else Process.sequential

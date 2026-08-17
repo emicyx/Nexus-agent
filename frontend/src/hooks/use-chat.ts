@@ -4,6 +4,7 @@ import { useState, useCallback, useRef, useEffect, useMemo } from "react";
 import {
   streamChat,
   submitApproval,
+  getApproval,
   getChatSession,
   type ChatEvent,
 } from "@/lib/api-client";
@@ -379,6 +380,38 @@ export function useChat(crewId?: number | null) {
     },
     [],
   );
+
+  // 轮询待审批状态：后端 60s 超时会把 Redis 状态置为 TIMEOUT，前端定时拉取
+  // 让卡片正确显示"已超时"（也覆盖用户没点按钮、跨端审批等场景）。
+  useEffect(() => {
+    const pending = approvals.filter((a) => a.status === "PENDING");
+    if (pending.length === 0) return;
+
+    const timer = setInterval(async () => {
+      for (const a of pending) {
+        try {
+          const result = await getApproval(a.id);
+          if (result.status !== "PENDING") {
+            setApprovals((prev) =>
+              prev.map((p) =>
+                p.id === a.id
+                  ? {
+                      ...p,
+                      status: result.status as Approval["status"],
+                      comment: result.comment || p.comment,
+                    }
+                  : p,
+              ),
+            );
+          }
+        } catch {
+          // 审批单不存在/已过期（Redis key 过期）：忽略，等下一轮
+        }
+      }
+    }, 3000);
+
+    return () => clearInterval(timer);
+  }, [approvals]);
 
   return {
     messages,

@@ -69,7 +69,7 @@ export default function ChatPage() {
 
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, steps]);
+  }, [messages, steps, approvals]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
