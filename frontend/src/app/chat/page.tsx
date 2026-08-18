@@ -13,7 +13,7 @@ import {
   type CrewRead,
   type ChatSessionRead,
 } from "@/lib/api-client";
-import { Send, Square, Plus, Users, GitBranch, MessageCircle, Trash2, History, Loader2 } from "lucide-react";
+import { Send, Square, Plus, Users, GitBranch, MessageCircle, Trash2, History, Loader2, ArrowDown } from "lucide-react";
 
 export default function ChatPage() {
   const [crews, setCrews] = useState<CrewRead[]>([]);
@@ -36,6 +36,10 @@ export default function ChatPage() {
   } = useChat(selectedCrewId);
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
+  // 是否处于滚动容器底部（用户上滚读历史时置 false，暂停自动滚底跟随）
+  const atBottomRef = useRef(true);
+  // 用户离开底部时显示悬浮「回到底部」按钮
+  const [showScrollToBottom, setShowScrollToBottom] = useState(false);
 
   useEffect(() => {
     listCrews()
@@ -67,9 +71,38 @@ export default function ChatPage() {
     prevStreamingRef.current = isStreaming;
   }, [isStreaming, selectedCrewId, refreshSessions]);
 
+  // 切换会话/新建对话时重置为跟随底部（先于自动滚底 effect 声明，保证切会话后回到底部）
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
-  }, [messages, steps, approvals]);
+    atBottomRef.current = true;
+    setShowScrollToBottom(false);
+  }, [currentSessionUuid]);
+
+  // 自动滚到底部：仅当用户已在底部时跟随——流式期间上滚读历史不会被拽回
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || !atBottomRef.current) return;
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  }, [messages, steps, approvals, currentSessionUuid]);
+
+  const handleMessageScroll = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const atBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60;
+    atBottomRef.current = atBottom;
+    if (atBottom) {
+      setShowScrollToBottom(false);
+    } else if (messages.length > 0) {
+      setShowScrollToBottom(true);
+    }
+  };
+
+  const scrollToBottom = () => {
+    const el = scrollRef.current;
+    if (!el) return;
+    atBottomRef.current = true;
+    setShowScrollToBottom(false);
+    el.scrollTo({ top: el.scrollHeight, behavior: "smooth" });
+  };
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -265,8 +298,12 @@ export default function ChatPage() {
   return (
     <AppShell leftPanel={leftPanel} rightPanel={rightPanel}>
       <div className="flex h-full flex-col">
-        {/* 消息区 */}
-        <div ref={scrollRef} className="flex-1 overflow-hidden">
+        {/* 消息区 — 自身即滚动容器（overflow-y-auto），滚轮可上下滑动历史 */}
+        <div
+          ref={scrollRef}
+          onScroll={handleMessageScroll}
+          className="relative flex-1 overflow-y-auto"
+        >
           <MessageList
             messages={messages}
             steps={steps}
@@ -275,6 +312,16 @@ export default function ChatPage() {
             onResolveApproval={resolveApproval}
             onExampleClick={(text) => send(text)}
           />
+          {/* 悬浮「回到底部」按钮：用户离开底部读历史时出现 */}
+          {showScrollToBottom && (
+            <button
+              onClick={scrollToBottom}
+              className="absolute bottom-3 left-1/2 z-30 flex -translate-x-1/2 items-center gap-1 rounded-full border border-sakura-200 bg-white/95 px-3 py-1.5 text-xs text-sakura-600 shadow-lg backdrop-blur transition hover:bg-sakura-50"
+            >
+              <ArrowDown size={12} />
+              回到底部
+            </button>
+          )}
         </div>
 
         {/* 活跃 Agent 状态条 */}

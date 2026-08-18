@@ -26,7 +26,7 @@ export function MessageList({
   const lastThinking = steps.filter((s) => s.kind === "thinking" || s.kind === "thinking_streaming").pop();
 
   return (
-    <div className="flex-1 overflow-y-auto space-y-3 px-4 py-4">
+    <div className="h-full space-y-3 px-4 py-4">
       {/* HITL 审批卡片 — 吸顶显示，保证审批等待期间始终在视口内 */}
       {approvals && approvals.length > 0 && onResolveApproval && (
         <div className="sticky top-0 z-20 -mx-4 -mt-4 mb-1 space-y-3 bg-white/95 px-4 pb-3 pt-4 shadow-[0_2px_8px_rgba(244,114,182,0.12)] backdrop-blur">
