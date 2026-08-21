@@ -44,7 +44,10 @@ export default function ChatPage() {
   useEffect(() => {
     listCrews()
       .then(setCrews)
-      .catch(() => {});
+      .catch((err) => {
+        console.error("加载 Crew 列表失败:", err);
+        setCrews([]);
+      });
   }, []);
 
   // 切换 crew 时加载该 crew 的 sessions 列表
@@ -55,7 +58,10 @@ export default function ChatPage() {
     }
     listChatSessions(crewId)
       .then(setSessions)
-      .catch(() => setSessions([]));
+      .catch((err) => {
+        console.error("加载会话列表失败:", err);
+        setSessions([]);
+      });
   }, []);
 
   useEffect(() => {

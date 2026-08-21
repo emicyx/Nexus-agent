@@ -40,37 +40,39 @@
 
 ---
 
-## P1 — 用户可感知缺陷与工程保障
+## P1 — 用户可感知缺陷与工程保障（✅ 2026-08-21 全部完成）
 
-### P1-1 前端补齐 task_completed / delegation 渲染（require.txt todo 5 收尾）
+> 实施记录：前端补齐 `task_completed`/`delegation` 渲染（use-chat case + step-panel 委派卡/任务完成卡）+ SSE 三方契约测试（`test_sse_contract.py`，锁死后端事件全集 ↔ api-client 类型 ↔ use-chat case）；testing/ 入库 + GitHub Actions 三 job（backend 单测/集成 + frontend tsc/build）+ 存量过期断言修复；crewai patch 失效启动即 RuntimeError（`CREWAI_PATCH_REQUIRED` 可显式降级）；上传 10MB 限流（读上限+1 字节判断）、embedding 三处实现收敛到 `llm/embedding.py`（批量统一 `EMBEDDING_BATCH_SIZE=10`）、Redis KEYS→SCAN；Redis 可选密码（compose 参数展开，默认无密码兼容）；`GET /v1/chat/sessions/uuid/{uuid}` 直查端点 + 前端去 O(N) 绕路 + 吞错改 console.error + next.config rewrites 死代码移除。
+
+### P1-1 ✅ 前端补齐 task_completed / delegation 渲染（require.txt todo 5 收尾）
 - **现状**：后端已推送 `task_completed`（含 task_name/output_format/pydantic_valid/raw_preview）和 `delegation`（含 coworker/task/context）事件，`api-client.ts` 已定义类型，但 `use-chat.ts` 无对应 case，**事件被静默丢弃**——"更详细的返回"做了后端到不了界面。
 - **目标**：use-chat 新增两个 case；step-panel 渲染委派卡片（manager → 某子 agent，任务摘要）与任务完成卡片（产出预览 + pydantic 校验徽标）。
 - **涉及**：`frontend/src/hooks/use-chat.ts`、`components/chat/step-panel.tsx`。
 - **验收**：hierarchical Crew 聊天中可见"A 委派给 B 做 X"及每个任务的产出预览。
 
-### P1-2 提交测试 + 最小 CI
+### P1-2 ✅ 提交测试 + 最小 CI
 - **现状**：`testing/` 目录（含 e2e smoke 证据）未纳入 git，无 pytest 配置、无 CI。monkey-patch、路径工具、SSE 协议全靠手测。P0 已新增 4 个回归测试文件（file_utils/net_guard/api_auth/factory_p0），**但 testing/ 未提交意味着这些测试随工作区丢失即失效**——这是当前最高性价比的一步。
 - **本地跑法**（已验证）：单测 `.venv/Scripts/python.exe -m pytest testing/unit -q`；集成需先 `docker compose up -d postgres redis` 并带 `POSTGRES_DSN=postgresql://nexus:nexus@localhost:5432/nexus REDIS_URL=redis://localhost:6379/0`；前端 `npx tsc --noEmit`。
 - **已知过期测试**：`testing/integration/test_api_documents.py::test_create_document_and_search` 断言 `chunk_count >= 3`，与语义分块（e9ef389）后的合并行为不符，为存量失败，需更新断言。
 - **目标**：① `git add testing/`（注意 `.gitignore` 检查是否排除了它）并排除 e2e 证据产物；② GitHub Actions：backend ruff+pytest（带 PG service 容器）、frontend tsc+build。
 - **验收**：CI 绿；改坏 tsquery 构造或沙箱校验会被测试抓住。
 
-### P1-3 检索/上传健壮性
+### P1-3 ✅ 检索/上传健壮性
 - **现状**：`documents.py:57` 上传无大小限制（整文件进内存）；embedding 客户端三份且 batch 上限矛盾（`embedding.py` 10 vs `kb_ingest_tool._embed_texts_sync` 25，DashScope 上限 25——统一为共享实现）；`approvals.py:21` 用生产禁用的 Redis `KEYS approval:*`。
 - **目标**：上传限流（如 10MB）+ 流式读；embedding 收敛到 `llm/embedding.py` 单实现（同步版包一层）；`KEYS` 改 `SCAN`。
 - **涉及**：`api/v1/documents.py`、`llm/embedding.py`、`tools/kb_ingest_tool.py`、`services/memory_ltm.py`、`api/v1/approvals.py`。
 
-### P1-3b P0 加固后的安全残余（低优先）
+### P1-3b ✅ P0 加固后的安全残余（低优先）
 - **Redis 无密码且映射宿主机**：加 `--requirepass ${REDIS_PASSWORD:-}`，`REDIS_URL` 同步带密码（compose 改动小，但需确认工具内同步 Redis 客户端的连接串来源）。
 - **Playwright 渲染路的浏览器内重定向**：入口 URL 已过 net_guard，但 Chromium 内部跟随 30x 跳私网未拦截；彻底解法是 `page.route("**")` 请求拦截逐个校验，低优先（需先有真实内网页面抓取需求才值得做）。
 - **FastAPI `/docs` Swagger 无鉴权暴露**：接口结构对局域网可见，私人部署可接受；如需收紧给 docs_url 也挂依赖或关闭。
 
-### P1-4 前端静默错误与 O(N) 绕路
+### P1-4 ✅ 前端静默错误与 O(N) 绕路
 - **现状**：`chat/page.tsx` 多处 `.catch(() => {})` 吞错，会话列表加载失败无感知；`use-chat.ts:439` 取单个会话靠拉全量列表线性 find（后端已有 `get_session_by_uuid` service 但无路由）。
 - **目标**：新增 `GET /v1/chat/sessions/{uuid}`；catch 里至少 toast/console.error；清理 `next.config.js` 死代码 rewrites（与 api-client 直连并存）。
 - **涉及**：`api/v1/chat_sessions.py`、`hooks/use-chat.ts`、`app/chat/page.tsx`、`next.config.js`。
 
-### P1-5 crewai 版本守卫 fail-fast
+### P1-5 ✅ crewai 版本守卫 fail-fast
 - **现状**：`crewai_async_patch` / delegation patch 在版本漂移或 sentinel 不匹配时**静默跳过仅告警**，升级 crewai 后 HITL 忙等、Playwright 会重新冻结事件循环，且无人察觉。
 - **目标**：启动时 patch 未应用且 `settings` 要求启用 → 抛异常拒绝启动（或显式 `CREWAI_PATCH_REQUIRED=false` 才允许降级）。
 - **涉及**：`crews/crewai_async_patch.py`、`main.py` 启动检查。
@@ -109,9 +111,10 @@
 ## 建议执行顺序
 
 ```
-P0-1 → P0-2 → P0-5 → P0-3 → P0-4     ✅ 已全部完成（2026-08-21）
-P1-1 → P1-2 → P1-3 → P1-4 → P1-5     （下一步：两周内，可感知缺陷 + 工程保障）
-P2 按需穿插，P2-1/P2-2 在下次大改动前完成
+P0-1 → P0-2 → P0-5 → P0-3 → P0-4     ✅ 已完成（2026-08-21）
+P1-1 → P1-2 → P1-3 → P1-4 → P1-5     ✅ 已完成（2026-08-21）
+P2-1/P2-2（LLM 合并、factory 拆分）   ← 下一步：下次大改动前完成
+产品项（loop-agent / 熔断补全 / 执行速度）按需
 ```
 
 每完成一项：勾选状态、在 `进度.md` 记一笔、同步更新本文档与 architecture.md 对应章节。

@@ -18,6 +18,11 @@ services:
 
   redis:
     image: redis:7-alpine
+    # 可选密码：.env 设 REDIS_PASSWORD 后启用 requirepass；留空 = 无密码（现状）
+    # （sh 参数展开 ${VAR:+...}：变量非空才追加 --requirepass）
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:-}
+    command: ["sh", "-c", "exec redis-server ${REDIS_PASSWORD:+--requirepass \"$REDIS_PASSWORD\"}"]
     ports:
       - "6379:6379"
     healthcheck:
@@ -31,7 +36,8 @@ services:
     env_file: .env
     environment:
       POSTGRES_DSN: postgresql://nexus:${POSTGRES_PASSWORD:-nexus}@postgres:5432/nexus
-      REDIS_URL: redis://redis:6379/0
+      # 启用 Redis 密码时需在 .env 里整体覆盖 REDIS_URL（如 redis://:密码@redis:6379/0）
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
     ports:
       - "8000:8000"
     volumes:

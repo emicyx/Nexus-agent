@@ -31,6 +31,11 @@ class Settings(BaseSettings):
     # 内网部署场景如需抓取内网页面，设 SSRF_ALLOW_PRIVATE_NETWORK=true。
     SSRF_ALLOW_PRIVATE_NETWORK: bool = False
 
+    # crewai monkey-patch 守卫（P1-5）：async patch 未生效时拒绝启动。
+    # crewai 版本漂移/源码变化会让 patch 静默跳过，届时 HITL 忙等、Playwright
+    # 渲染会重新冻结事件循环。明确知道自己要降级运行时才设 false。
+    CREWAI_PATCH_REQUIRED: bool = True
+
     # 基础设施（Week 3+5 使用）
     POSTGRES_DSN: str = "postgresql://nexus:nexus@postgres:5432/nexus"
     REDIS_URL: str = "redis://redis:6379/0"
@@ -38,6 +43,10 @@ class Settings(BaseSettings):
     # Embedding 配置（Week 4 RAG，复用 QWEN_API_KEY）
     EMBEDDING_MODEL: str = "text-embedding-v3"
     EMBEDDING_DIM: int = 1024
+    # 单次请求最大条数：统一 async/sync 所有 embedding 路径。
+    # 历史上三处实现各用 6/10/25（DashScope 对 batch 上限的反馈不一致），
+    # 取实测最稳的 10 作为默认；如确定账号支持更大 batch 可调高。
+    EMBEDDING_BATCH_SIZE: int = 10
 
     # CrewAI 记忆存储路径（Week 8 双层记忆，ChromaDB + SQLite 持久化）
     CREWAI_STORAGE_DIR: str = "/app/data"

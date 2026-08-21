@@ -16,11 +16,13 @@ logger = logging.getLogger("approvals")
 
 @router.get("/pending/list", response_model=list[ApprovalRead])
 async def list_pending_approvals():
-    """列出所有待审批单（调试用）。"""
+    """列出所有待审批单（调试用）。
+
+    scan_iter 增量遍历替代 KEYS（后者是 O(全库) 阻塞命令，生产禁用）。
+    """
     r = get_async_redis()
-    keys = await r.keys("approval:*")
     result = []
-    for k in keys:
+    async for k in r.scan_iter(match="approval:*"):
         raw = await r.get(k)
         if raw:
             data = json.loads(raw)

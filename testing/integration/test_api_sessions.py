@@ -51,3 +51,30 @@ def test_session_uuid_min_length(client: TestClient):
         assert r.status_code == 422
     finally:
         cleanup_crew(client, cid)
+
+
+def test_get_session_by_uuid(client: TestClient):
+    """P1-4：按 uuid 直查详情（替代前端拉全量列表线性 find）。"""
+    crew = create_crew(client)
+    cid = crew["id"]
+    payload = _make_session_payload(cid, "uuidq")
+    sess_id = None
+    try:
+        r = client.post("/v1/chat/sessions", json=payload)
+        assert r.status_code == 201, r.text
+        sess_id = r.json()["id"]
+        uuid = r.json()["session_uuid"]
+
+        r = client.get(f"/v1/chat/sessions/uuid/{uuid}")
+        assert r.status_code == 200
+        body = r.json()
+        assert body["id"] == sess_id
+        assert body["session_uuid"] == uuid
+        assert body["messages"] == []
+
+        # 不存在的 uuid → 404
+        assert client.get("/v1/chat/sessions/uuid/nonexistent-uuid-00000000").status_code == 404
+    finally:
+        if sess_id:
+            client.delete(f"/v1/chat/sessions/{sess_id}")
+        cleanup_crew(client, cid)

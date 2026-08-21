@@ -378,6 +378,9 @@ export const listChatSessions = (crewId?: number) => {
 export const getChatSession = (id: number) =>
   jsonRequest<ChatSessionDetail>(`${API_BASE}/v1/chat/sessions/${id}`);
 
+export const getChatSessionByUuid = (uuid: string) =>
+  jsonRequest<ChatSessionDetail>(`${API_BASE}/v1/chat/sessions/uuid/${uuid}`);
+
 export const createChatSession = (payload: {
   crew_id: number;
   session_uuid: string;

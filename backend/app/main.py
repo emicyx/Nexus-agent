@@ -17,6 +17,7 @@ from app.api.v1.skills import router as skills_router
 from app.api.v1.tools import router as tools_router
 from app.config import settings
 from app.core.security import require_api_key
+from app.crews.crewai_async_patch import is_applied as is_async_patch_applied
 from app.crews.factory import get_llm
 from app.db.seed import ensure_seed
 from app.db.session import init_db
@@ -46,6 +47,15 @@ async def startup() -> None:
         logger.warning(
             "APP_API_KEY 未设置：所有 /v1/* 接口无鉴权。"
             "部署环境请在 .env 中设置 APP_API_KEY，并给前端配 NEXT_PUBLIC_API_KEY。"
+        )
+    # P1-5 fail-fast：async patch 未生效（crewai 版本漂移/源码变化被守卫跳过）时，
+    # 同步工具（HITL 忙等 60s / Playwright 渲染 90s）会冻结整个事件循环。
+    # 升级 crewai 后必须重新适配 patch，明确降级请设 CREWAI_PATCH_REQUIRED=false。
+    if settings.CREWAI_PATCH_REQUIRED and not is_async_patch_applied():
+        raise RuntimeError(
+            "crewai_async_patch 未生效（版本漂移或源码变化被守卫跳过）。"
+            "此时同步工具将阻塞事件循环，拒绝启动。"
+            "升级 crewai 后请重新适配 patch，或显式设置 CREWAI_PATCH_REQUIRED=false 降级。"
         )
     logger.info("startup: initializing DB...")
     try:

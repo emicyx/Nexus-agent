@@ -12,17 +12,16 @@
 """
 import json
 import logging
-import os
 import time
 from typing import Any
 
-import requests
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import create_engine, text as sa_text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
+from app.llm.embedding import embed_texts_sync
 from app.services.semantic_chunker import semantic_chunk
 
 logger = logging.getLogger("kb_ingest")
@@ -42,44 +41,6 @@ def _get_sync_session() -> Session:
         _sync_engine = create_engine(dsn, pool_pre_ping=True, future=True)
         _SyncSessionLocal = sessionmaker(bind=_sync_engine, expire_on_commit=False)
     return _SyncSessionLocal()
-
-
-def _embed_texts_sync(texts: list[str]) -> list[list[float]]:
-    """同步批量调用 DashScope embedding API。
-
-    DashScope text-embedding-v3 原生 API 单次最多 6 条输入，超出时自动分批。
-    """
-    api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        raise ValueError("缺少 QWEN_API_KEY")
-    url = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    # DashScope 原生限制 6 条/次，用 6 确保不超限（兼容模式也可能受限）
-    batch_size = 6
-    all_embeddings: list[list[float]] = []
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        payload = {
-            "model": settings.EMBEDDING_MODEL,
-            "input": batch,
-            "dimensions": settings.EMBEDDING_DIM,
-            "encoding_format": "float",
-        }
-        r = requests.post(url, json=payload, headers=headers, timeout=60)
-        if not r.ok:
-            # 记录完整响应体，便于诊断 400 错误的具体原因
-            logger.error(
-                "embedding_api_error status=%s batch=%d/%d body=%s",
-                r.status_code, i // batch_size + 1, -(-len(texts) // batch_size), r.text[:500],
-            )
-        r.raise_for_status()
-        data = r.json()["data"]
-        # DashScope 返回按 input 顺序排列
-        all_embeddings.extend([d["embedding"] for d in data])
-    return all_embeddings
 
 
 def _vec_to_sql_literal(vec: list[float]) -> str:
@@ -210,7 +171,7 @@ class KbIngestTool(BaseTool):
         # 批量嵌入
         t1 = time.perf_counter()
         try:
-            embeddings = _embed_texts_sync(chunks)
+            embeddings = embed_texts_sync(chunks)
         except Exception as e:
             logger.exception("embed_failed")
             return f"向量化失败：{e}"

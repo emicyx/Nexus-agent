@@ -32,6 +32,33 @@ async def get_session(session_id: int, session: AsyncSession = Depends(get_db)):
     return detail
 
 
+@router.get("/uuid/{session_uuid}", response_model=ChatSessionDetail)
+async def get_session_by_uuid(session_uuid: str, session: AsyncSession = Depends(get_db)):
+    """按 session_uuid 获取详情（前端只持有 uuid，此前靠拉全量列表线性 find）。"""
+    s = await chat_service.get_session_by_uuid(session, session_uuid)
+    if s is None:
+        raise HTTPException(404, "Session not found")
+    return {
+        "id": s.id,
+        "crew_id": s.crew_id,
+        "session_uuid": s.session_uuid,
+        "title": s.title,
+        "created_at": s.created_at,
+        "updated_at": s.updated_at,
+        "message_count": len(s.messages),
+        "last_message_at": s.messages[-1].created_at if s.messages else None,
+        "messages": [
+            {
+                "id": m.id,
+                "role": m.role,
+                "content": m.content,
+                "created_at": m.created_at,
+            }
+            for m in s.messages
+        ],
+    }
+
+
 @router.post("", response_model=ChatSessionRead, status_code=201)
 async def create_session(payload: ChatSessionCreate, session: AsyncSession = Depends(get_db)):
     """创建新 session（前端生成 session_uuid 传入）。"""

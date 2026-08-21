@@ -9,7 +9,6 @@
 """
 import json
 import logging
-import os
 import concurrent.futures
 from datetime import datetime
 
@@ -18,6 +17,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 from app.db.session import AsyncSessionLocal
+from app.llm.embedding import embed_texts_sync
 from app.models import UserMemory
 
 logger = logging.getLogger("memory.ltm")
@@ -207,9 +207,9 @@ def _run_memory_extraction(
             logger.info("ltm extract: no valid memories after filter")
             return
 
-        # 3. 批量 embed
+        # 3. 批量 embed（统一走 llm/embedding.py 同步实现）
         contents = [c["content"] for c in candidates]
-        embeddings = _embed_texts_sync(contents)
+        embeddings = embed_texts_sync(contents)
         if len(embeddings) != len(candidates):
             logger.warning(
                 f"ltm extract: embedding count mismatch {len(embeddings)} != {len(candidates)}"
@@ -249,34 +249,3 @@ def _run_memory_extraction(
         logger.warning(f"ltm extract failed: {e}")
 
 
-# ---------- 同步 embedding（后台线程内使用） ----------
-
-_EMBED_ENDPOINT = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
-
-
-def _embed_texts_sync(texts: list[str]) -> list[list[float]]:
-    """同步批量 embed（后台线程内调用，不能用 asyncio）。"""
-    import requests
-    api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        raise ValueError("缺少 QWEN_API_KEY")
-    payload = {
-        "model": settings.EMBEDDING_MODEL,
-        "input": texts,
-        "dimensions": settings.EMBEDDING_DIM,
-        "encoding_format": "float",
-    }
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-    }
-    # DashScope 限制每次最多 25 条
-    all_embeddings = []
-    for i in range(0, len(texts), 25):
-        batch = texts[i : i + 25]
-        payload["input"] = batch
-        resp = requests.post(_EMBED_ENDPOINT, json=payload, headers=headers, timeout=60)
-        resp.raise_for_status()
-        data = resp.json()
-        all_embeddings.extend([item["embedding"] for item in data["data"]])
-    return all_embeddings

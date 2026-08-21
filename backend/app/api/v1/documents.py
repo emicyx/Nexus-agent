@@ -17,6 +17,9 @@ from app.services import document_service
 router = APIRouter()
 logger = logging.getLogger("documents")
 
+# P1-3 上传限流：超限直接 413，避免整文件读进内存 + 后续多次 embedding 放大
+MAX_UPLOAD_BYTES = 10 * 1024 * 1024  # 10MB
+
 
 @router.get("", response_model=list[DocumentRead])
 async def list_documents(session: AsyncSession = Depends(get_db)):
@@ -29,6 +32,8 @@ async def create_document(
     session: AsyncSession = Depends(get_db),
 ):
     """JSON 方式上传：{name, content, source_type?}"""
+    if len(payload.content.encode("utf-8")) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"内容超过上限 {MAX_UPLOAD_BYTES // 1024 // 1024}MB")
     try:
         doc = await document_service.ingest_document(
             session, name=payload.name, content=payload.content,
@@ -54,7 +59,10 @@ async def upload_document_file(
     session: AsyncSession = Depends(get_db),
 ):
     """multipart 上传：file 字段为文件，name 可选（默认取 filename）。"""
-    raw = await file.read()
+    # 只读到上限+1 字节即可判断超限，不必把整个文件拉进内存
+    raw = await file.read(MAX_UPLOAD_BYTES + 1)
+    if len(raw) > MAX_UPLOAD_BYTES:
+        raise HTTPException(413, f"文件超过上限 {MAX_UPLOAD_BYTES // 1024 // 1024}MB")
     try:
         content = raw.decode("utf-8")
     except UnicodeDecodeError:

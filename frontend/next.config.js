@@ -1,13 +1,6 @@
 /** @type {import('next').NextConfig} */
-const nextConfig = {
-  async rewrites() {
-    return [
-      {
-        source: "/v1/:path*",
-        destination: `${process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000"}/v1/:path*`,
-      },
-    ];
-  },
-};
+// 注：曾有 /v1/* rewrites 代理，但 api-client.ts 始终直连绝对 API_BASE，
+// 代理从未被使用（死代码），已移除。如需同源代理再恢复并改用相对路径。
+const nextConfig = {};
 
 module.exports = nextConfig;
