@@ -7,6 +7,7 @@ Week 3: **DB 驱动** — build_crew_from_db() 从 PostgreSQL 读取配置动态
 """
 import asyncio
 import concurrent.futures
+import contextvars
 import logging
 import os
 import time
@@ -443,8 +444,10 @@ async def build_crew_from_db(
         # 会新建 Task(description=..., agent=...) 不带 output_pydantic。
         # 这里构建查找表并 monkey-patch _execute，让委派创建的 Task
         # 自动继承对应 agent role 在 DB 中配置的 output_schema。
-        global _delegation_pydantic_map
-        _delegation_pydantic_map = _build_delegation_pydantic_map(tasks_cfg, agents_cfg)
+        # 查找表存 ContextVar（请求级）：并发 hierarchical 会话各自持各自的表，
+        # 修复原模块级全局互相覆写的竞态。
+        delegation_map = _build_delegation_pydantic_map(tasks_cfg, agents_cfg)
+        _delegation_pydantic_map_ctx.set(delegation_map)
         _apply_delegation_pydantic_patch()
 
     # Week 8: 双层记忆 — 任意 agent 启用 memory 时，Crew 级别开启 memory + embedder
@@ -726,9 +729,15 @@ def _wrap_delegate_tool_for_tracing(
 
 # ---------- Tracing：hierarchical 委派 output_pydantic 注入 ----------
 
-# 模块级查找表：sanitized_agent_role → Pydantic model
-# 由 build_crew_from_db() 设置，BaseAgentTool._execute patch 消费
-_delegation_pydantic_map: dict[str, type[PydanticBaseModel]] | None = None
+# 请求级查找表：sanitized_agent_role → Pydantic model
+# 由 build_crew_from_db() 写入，BaseAgentTool._execute patch 消费。
+# 用 ContextVar 而非模块级全局：每个 HTTP 请求（asyncio Task）有独立 context，
+# 并发 hierarchical 会话互不污染。工具执行经 crewai_async_patch 的
+# asyncio.to_thread 复制 context，委派 _execute 能读到发起请求的表；
+# 上下文丢失时 get() 返回 None，优雅降级为不注入。
+_delegation_pydantic_map_ctx: contextvars.ContextVar[
+    dict[str, type[PydanticBaseModel]] | None
+] = contextvars.ContextVar("_delegation_pydantic_map_ctx", default=None)
 _delegation_pydantic_patch_applied = False
 
 
@@ -794,7 +803,8 @@ def _apply_delegation_pydantic_patch() -> None:
         """带 output_pydantic 注入的 _execute。
 
         与原方法行为完全一致，唯一区别：在创建 task_with_assigned_agent 时，
-        从 _delegation_pydantic_map 查找匹配的 Pydantic model 并注入。
+        从 _delegation_pydantic_map_ctx（当前请求的查找表）查找匹配的
+        Pydantic model 并注入。
         """
         try:
             if agent_name is None:
@@ -827,9 +837,10 @@ def _apply_delegation_pydantic_patch() -> None:
 
         # ── 注入 output_pydantic ──
         output_pydantic = None
-        if _delegation_pydantic_map is not None:
+        dmap = _delegation_pydantic_map_ctx.get()
+        if dmap is not None:
             selected_sanitized = self.sanitize_agent_name(selected_agent.role)
-            output_pydantic = _delegation_pydantic_map.get(selected_sanitized)
+            output_pydantic = dmap.get(selected_sanitized)
             if output_pydantic is not None:
                 logger.debug(
                     "delegation pydantic injected: agent=%s schema=%s",
@@ -857,10 +868,7 @@ def _apply_delegation_pydantic_patch() -> None:
     patched_execute._orig_execute = _orig_execute  # type: ignore[attr-defined]
     _BAT._execute = patched_execute
     _delegation_pydantic_patch_applied = True
-    logger.info(
-        "delegation output_pydantic patch applied: mapped %d roles",
-        len(_delegation_pydantic_map) if _delegation_pydantic_map else 0,
-    )
+    logger.info("delegation output_pydantic patch applied")
 
 
 async def _load_crew(session: AsyncSession, crew_id: int) -> CrewConfig | None:
@@ -937,6 +945,9 @@ async def run_crew_chat(
     if session_id:
         t_hist0 = time.perf_counter()
         summary_text = ""
+        # 兜底初始化：sess 查不到（会话被删/创建失败被上层吞掉）时不能 NameError，
+        # 此时按"无历史"处理继续执行
+        history: list[dict[str, str]] = []
         async with AsyncSessionLocal() as db:
             from app.services.chat_service import get_session_by_uuid
             sess = await get_session_by_uuid(db, session_id)
@@ -967,8 +978,7 @@ async def run_crew_chat(
         logger.info(
             "timing: get_chat_history(db) %.3fs (session_uuid=%s, msgs=%d, summary_chars=%d, stm_chars=%d)",
             time.perf_counter() - t_hist0, session_id,
-            len(history) if session_id else 0,
-            len(summary_text), len(history_context),
+            len(history), len(summary_text), len(history_context),
         )
 
     # Layer 2 LTM：语义检索用户偏好/经验

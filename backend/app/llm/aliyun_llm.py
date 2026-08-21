@@ -92,6 +92,23 @@ class _StreamContext:
 _stream_ctx: contextvars.ContextVar = contextvars.ContextVar('_stream_ctx', default=None)
 
 
+def _summarize_llm_result(result: dict[str, Any]) -> str:
+    """LLM 响应日志摘要（只含元信息，不含正文/图片，防敏感信息进日志）。
+
+    完整报文在 _do_call/_ado_call 内有 DEBUG 级 guarded 日志，排障时开 DEBUG 可见。
+    """
+    try:
+        choice = (result.get("choices") or [{}])[0]
+        msg = choice.get("message") or {}
+        return (
+            f"finish={choice.get('finish_reason')} "
+            f"content_chars={len(msg.get('content') or '')} "
+            f"tool_calls={len(msg.get('tool_calls') or [])}"
+        )
+    except Exception:
+        return "(摘要构造失败)"
+
+
 # 模块级 httpx.AsyncClient 单例：原生异步 LLM 调用复用连接池（keep-alive）。
 _async_client: httpx.AsyncClient | None = None
 
@@ -327,7 +344,21 @@ class AliyunLLM(BaseLLM):
             messages = [{"role": "user", "content": messages}]
 
         messages, flag = self._normalize_multimodal_tool_result(messages)
-        logger.info("normalized_multimodal_tool_result flag=%s messages=%s", flag, json.dumps(messages, ensure_ascii=False, indent=2))
+        # 脱敏日志：只记每条消息的 role/长度（正文与 base64 图片不进 INFO 日志）
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "normalized_multimodal_tool_result flag=%s messages=%s",
+                flag,
+                json.dumps(messages, ensure_ascii=False, indent=2),
+            )
+        logger.info(
+            "normalized_multimodal_tool_result flag=%s msg_shapes=%s",
+            flag,
+            [
+                {"role": m.get("role"), "chars": len(str(m.get("content") or ""))}
+                for m in messages
+            ],
+        )
         self._validate_messages(messages)
 
         payload: dict[str, Any] = {
@@ -371,7 +402,7 @@ class AliyunLLM(BaseLLM):
                 content = stream_result
         else:
             result = self._do_call(payload)
-            logger.info("收到 LLM API 响应  result=%s", result)
+            logger.info("收到 LLM API 响应 model=%s %s", payload.get("model"), _summarize_llm_result(result))
 
         # 统一触发 on_llm_end 回调
         if result is not None:
@@ -727,7 +758,7 @@ class AliyunLLM(BaseLLM):
                 content = stream_result
         else:
             result = await self._ado_call(payload)
-            logger.info("收到 LLM API 响应  result=%s", result)
+            logger.info("收到 LLM API 响应 model=%s %s", payload.get("model"), _summarize_llm_result(result))
 
         if result is not None:
             if callbacks:

@@ -9,7 +9,7 @@ from typing import Any
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from app.tools._file_utils import resolve_read_path, truncate
+from app.tools._file_utils import SandboxViolation, resolve_read_path, truncate
 
 logger = logging.getLogger("file_viewer")
 
@@ -25,8 +25,8 @@ class FileViewerInput(BaseModel):
     file_path: str = Field(
         ...,
         description=(
-            "文件路径。支持绝对路径和相对 /app/data/ 的路径。"
-            "例如：'outputs/hello.py' 或 '/app/data/outputs/report.docx'"
+            "文件路径，相对 /app/data/ 目录（沙箱限制，仅能读取该目录内文件）。"
+            "例如：'outputs/hello.py' 或 'outputs/report.docx'"
         ),
     )
     max_chars: int = Field(
@@ -49,7 +49,10 @@ class FileViewerTool(BaseTool):
         if not file_path:
             return "错误：file_path 不能为空"
 
-        path = resolve_read_path(file_path.strip())
+        try:
+            path = resolve_read_path(file_path.strip())
+        except SandboxViolation as e:
+            return f"拒绝读取：{e}"
         if not path.exists():
             return f"文件不存在: {file_path}"
         if not path.is_file():

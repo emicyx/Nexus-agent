@@ -10,6 +10,8 @@ from pathlib import Path
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from app.tools._file_utils import SandboxViolation, ensure_dir_within
+
 
 class FixedDirectoryReadToolSchema(BaseModel):
     """Input for FixedDirectoryReadTool."""
@@ -18,7 +20,10 @@ class FixedDirectoryReadToolSchema(BaseModel):
 class DirectoryReadToolSchema(FixedDirectoryReadToolSchema):
     """Input for FixedDirectoryReadTool."""
 
-    directory: str = Field(..., description="Mandatory directory to list content")
+    directory: str = Field(
+        ...,
+        description="Directory to list content（沙箱限制：仅 /app/data/ 内目录，如 'outputs/'）",
+    )
 
 
 class FixedDirectoryReadTool(BaseTool):
@@ -47,6 +52,14 @@ class FixedDirectoryReadTool(BaseTool):
         directory: str | None = kwargs.get("directory", self.directory)
         if directory is None:
             raise ValueError("Directory must be provided.")
+
+        # 沙箱校验：目录必须限制在读取白名单（/app/data/ 等）内
+        try:
+            safe_dir = ensure_dir_within(directory)
+        except SandboxViolation as e:
+            return f"拒绝访问：{e}"
+
+        directory = str(safe_dir)
 
         # 规范化目录路径
         directory = os.path.normpath(directory)

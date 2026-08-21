@@ -5,7 +5,7 @@ from crewai.tools import BaseTool
 from docx import Document
 from pydantic import BaseModel, Field
 
-from app.tools._file_utils import resolve_output_path
+from app.tools._file_utils import SandboxViolation, resolve_output_path
 
 
 class WordWriterInput(BaseModel):
@@ -59,6 +59,9 @@ class WordWriterTool(BaseTool):
             if para:
                 doc.add_paragraph(para)
 
-        path = resolve_output_path(filename, sub_dir)
+        try:
+            path = resolve_output_path(filename, sub_dir)
+        except SandboxViolation as e:
+            return f"拒绝写入：{e}"
         doc.save(str(path))
         return f"Word 文档已生成: {path}"

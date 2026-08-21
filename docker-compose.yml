@@ -3,7 +3,7 @@ services:
     build: ./infra/postgres
     environment:
       POSTGRES_USER: nexus
-      POSTGRES_PASSWORD: nexus
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus}
       POSTGRES_DB: nexus
     ports:
       - "5432:5432"
@@ -30,7 +30,7 @@ services:
     build: ./backend
     env_file: .env
     environment:
-      POSTGRES_DSN: postgresql://nexus:nexus@postgres:5432/nexus
+      POSTGRES_DSN: postgresql://nexus:${POSTGRES_PASSWORD:-nexus}@postgres:5432/nexus
       REDIS_URL: redis://redis:6379/0
     ports:
       - "8000:8000"
@@ -47,6 +47,7 @@ services:
     build: ./frontend
     environment:
       NEXT_PUBLIC_API_BASE: http://localhost:8000
+      NEXT_PUBLIC_API_KEY: ${APP_API_KEY:-}
     ports:
       - "3000:3000"
     volumes:

@@ -5,7 +5,7 @@ from crewai.tools import BaseTool
 from openpyxl import Workbook
 from pydantic import BaseModel, Field
 
-from app.tools._file_utils import resolve_output_path
+from app.tools._file_utils import SandboxViolation, resolve_output_path
 
 
 class ExcelWriterInput(BaseModel):
@@ -58,6 +58,9 @@ class ExcelWriterTool(BaseTool):
         for row in data:
             ws.append(row)
 
-        path = resolve_output_path(filename, sub_dir)
+        try:
+            path = resolve_output_path(filename, sub_dir)
+        except SandboxViolation as e:
+            return f"拒绝写入：{e}"
         wb.save(str(path))
         return f"Excel 文件已生成: {path}（{len(data)} 行数据）"

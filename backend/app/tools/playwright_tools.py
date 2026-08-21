@@ -12,6 +12,7 @@
   9. GetPageInfoTool    - 获取页面信息
 """
 import os
+import re
 import time
 from datetime import datetime
 from pathlib import Path
@@ -21,12 +22,22 @@ from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 from playwright.sync_api import sync_playwright, Page, TimeoutError as PlaywrightTimeout
 
+from app.config import settings
+from app.core.net_guard import validate_public_url
+
 # ── 全局配置 ──────────────────────────────────────────────────────────────────
 
-SCREENSHOTS_DIR = "./screenshots"
 DEFAULT_TIMEOUT = 30_000       # 全局默认超时 30s（毫秒）
 ACTION_DELAY = 0.5             # 操作间隔（秒），避免过快
 DEFAULT_VIEWPORT = {"width": 1920, "height": 1080}
+
+# 截图文件名只允许字母/数字/中文/点/下划线/连字符，杜绝路径穿越
+_SCREENSHOT_NAME_RE = re.compile(r"[^a-zA-Z0-9\u4e00-\u9fff._-]+")
+
+
+def _screenshots_dir() -> Path:
+    """截图目录：统一放在文件沙箱 {SANDBOX_DATA_DIR}/screenshots 下。"""
+    return Path(settings.SANDBOX_DATA_DIR) / "screenshots"
 
 
 # ── BrowserManager ─────────────────────────────────────────────────────────────
@@ -80,9 +91,18 @@ class BrowserManager:
 
 def _ensure_screenshots_dir() -> Path:
     """确保截图目录存在，返回路径。"""
-    dir_path = Path(SCREENSHOTS_DIR)
+    dir_path = _screenshots_dir()
     dir_path.mkdir(parents=True, exist_ok=True)
     return dir_path
+
+
+def _sanitize_screenshot_filename(filename: str) -> str:
+    """消毒截图文件名：替换非法字符为 _，剥掉任何路径成分。"""
+    name = _SCREENSHOT_NAME_RE.sub("_", filename.replace("\\", "/").split("/")[-1])
+    name = name.strip("._") or "screenshot"
+    if not name.lower().endswith(".png"):
+        name += ".png"
+    return name
 
 
 def _take_error_screenshot(description: str = "error") -> str:
@@ -153,6 +173,12 @@ class NavigateTool(BaseTool):
             page.goto(url, wait_until=wait_until, timeout=timeout)
             title = page.title()
             return f"成功导航至: {url}，页面标题: {title}"
+
+        # SSRF 防护：导航前校验目标（拒绝内网/环回/非法协议）
+        try:
+            validate_public_url(url)
+        except ValueError as e:
+            return f"拒绝导航：{e}"
         return _safe_execute(operation, f"导航到 {url}")
 
 
@@ -261,7 +287,7 @@ class ScreenshotToolInput(BaseModel):
 class ScreenshotTool(BaseTool):
     name: str = "Screenshot Tool"
     description: str = (
-        "对当前页面进行截图并保存到 ./screenshots/ 目录。"
+        "对当前页面进行截图并保存到数据沙箱的 screenshots/ 目录。"
         "触发时机：当需要记录测试证据、排查页面问题、保存页面状态时使用。"
         "适用边界：仅截取当前可视区域，不处理全页滚动截图。"
     )
@@ -274,7 +300,7 @@ class ScreenshotTool(BaseTool):
             if not filename:
                 timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
                 filename = f"screenshot_{timestamp}.png"
-            filepath = dir_path / filename
+            filepath = dir_path / _sanitize_screenshot_filename(filename)
             page.screenshot(path=str(filepath))
             return f"截图已保存至: {filepath}"
         return _safe_execute(operation, "页面截图", auto_screenshot=False)

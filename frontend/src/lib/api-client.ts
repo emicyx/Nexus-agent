@@ -26,6 +26,13 @@ export type ChatEvent =
 const API_BASE =
   process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
 
+// 后端 X-API-Key 静态鉴权（与 .env 的 APP_API_KEY 对应，留空则不发）
+const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+
+function authHeaders(): Record<string, string> {
+  return API_KEY ? { "X-API-Key": API_KEY } : {};
+}
+
 /**
  * 发送聊天消息并通过 SSE 流式接收 Agent 事件。
  * 浏览器 EventSource 不支持 POST，所以用 fetch + ReadableStream 手动解析 SSE。
@@ -37,7 +44,7 @@ export async function* streamChat(
 ): AsyncGenerator<ChatEvent> {
   const res = await fetch(`${API_BASE}/v1/chat/stream`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...authHeaders() },
     body: JSON.stringify({
       message,
       crew_id: opts.crewId ?? null,
@@ -187,8 +194,8 @@ export interface CrewRead {
 
 async function jsonRequest<T>(url: string, opts: RequestInit = {}): Promise<T> {
   const res = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
     ...opts,
+    headers: { "Content-Type": "application/json", ...authHeaders(), ...opts.headers },
   });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}: ${await res.text()}`);
@@ -321,6 +328,7 @@ export async function uploadDocumentFile(file: File, name?: string): Promise<Doc
   if (name) form.append("name", name);
   const res = await fetch(`${API_BASE}/v1/documents/upload`, {
     method: "POST",
+    headers: authHeaders(),
     body: form,
   });
   if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);

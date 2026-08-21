@@ -31,6 +31,7 @@ from html2text import HTML2Text
 from pydantic import BaseModel, Field
 
 from app.config import settings
+from app.core.net_guard import safe_get_with_redirects, validate_public_url
 from app.tools._file_utils import resolve_output_path
 
 logger = logging.getLogger("fetch_url")
@@ -123,20 +124,24 @@ class FetchUrlTool(BaseTool):
             return "错误：url 不能为空"
         if not (url.startswith("http://") or url.startswith("https://")):
             return f"错误：url 必须以 http:// 或 https:// 开头，收到: {url}"
+        # SSRF 防护：拒绝内网/环回/链路本地等非公网地址
+        try:
+            validate_public_url(url)
+        except ValueError as e:
+            return f"拒绝抓取：{e}"
 
         # ── path A: requests 快路径 ──
         requests_html: str | None = None
         requests_err: str | None = None
         try:
-            resp = requests.get(
-                url,
-                headers=_DEFAULT_HEADERS,
-                timeout=30,
-                allow_redirects=True,
-            )
+            # safe_get_with_redirects 手动逐跳校验重定向目标，防止公网页面 302 跳内网
+            resp = safe_get_with_redirects(url, headers=_DEFAULT_HEADERS, timeout=30)
             resp.raise_for_status()
             resp.encoding = resp.apparent_encoding or "utf-8"
             requests_html = resp.text
+        except ValueError as e:
+            # 重定向跳到非公网地址等安全拒绝：不降级 Playwright（浏览器会同样跟随该跳转）
+            return f"抓取被安全策略拒绝：{e}"
         except requests.RequestException as e:
             requests_err = f"{type(e).__name__}: {e}"
             logger.warning("fetch_url requests failed: %s -> %s", url, e)

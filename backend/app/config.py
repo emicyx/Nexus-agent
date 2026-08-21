@@ -18,6 +18,19 @@ class Settings(BaseSettings):
     BACKEND_PORT: int = 8000
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
+    # API 鉴权（P0-2）：X-API-Key 静态密钥。留空 = 不鉴权（本地开发兼容，启动时告警）。
+    # 设置后所有 /v1/* 接口强制校验；前端需同步配置 NEXT_PUBLIC_API_KEY。
+    APP_API_KEY: str = ""
+
+    # 文件工具沙箱（P0-1）：所有工具的读写限制在 SANDBOX_DATA_DIR 内。
+    # 写入仅允许 {SANDBOX_DATA_DIR}/outputs/**；读取允许 SANDBOX_DATA_DIR/** + SANDBOX_EXTRA_READ_DIRS。
+    SANDBOX_DATA_DIR: str = "/app/data"
+    SANDBOX_EXTRA_READ_DIRS: list[str] = []
+
+    # SSRF 防护（P0-3）：fetch_url / navigate 拒绝私网/环回/链路本地地址。
+    # 内网部署场景如需抓取内网页面，设 SSRF_ALLOW_PRIVATE_NETWORK=true。
+    SSRF_ALLOW_PRIVATE_NETWORK: bool = False
+
     # 基础设施（Week 3+5 使用）
     POSTGRES_DSN: str = "postgresql://nexus:nexus@postgres:5432/nexus"
     REDIS_URL: str = "redis://redis:6379/0"

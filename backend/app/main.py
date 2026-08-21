@@ -2,7 +2,7 @@
 import asyncio
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.agents import router as agents_router
@@ -16,6 +16,7 @@ from app.api.v1.output_schemas import router as output_schemas_router
 from app.api.v1.skills import router as skills_router
 from app.api.v1.tools import router as tools_router
 from app.config import settings
+from app.core.security import require_api_key
 from app.crews.factory import get_llm
 from app.db.seed import ensure_seed
 from app.db.session import init_db
@@ -40,6 +41,12 @@ app.add_middleware(
 @app.on_event("startup")
 async def startup() -> None:
     """启动时建表 + 写入种子数据 + 预热 LLM 连接。"""
+    # P0-2 鉴权提示：APP_API_KEY 未设置 = 接口裸奔（本地开发可接受，部署务必设置）
+    if not settings.APP_API_KEY:
+        logger.warning(
+            "APP_API_KEY 未设置：所有 /v1/* 接口无鉴权。"
+            "部署环境请在 .env 中设置 APP_API_KEY，并给前端配 NEXT_PUBLIC_API_KEY。"
+        )
     logger.info("startup: initializing DB...")
     try:
         await init_db()
@@ -85,14 +92,15 @@ def health():
     return {"status": "ok"}
 
 
-# 路由挂载
-app.include_router(chat_router, prefix="/v1/chat")
-app.include_router(chat_sessions_router, prefix="/v1/chat/sessions")
-app.include_router(agents_router, prefix="/v1/agents")
-app.include_router(tools_router, prefix="/v1/tools")
-app.include_router(skills_router, prefix="/v1/skills")
-app.include_router(output_schemas_router, prefix="/v1/schemas")
-app.include_router(crews_router, prefix="/v1/crews")
-app.include_router(documents_router, prefix="/v1/documents")
-app.include_router(approvals_router, prefix="/v1/approvals")
-app.include_router(memories_router, prefix="/v1/memories")
+# 路由挂载（全部走 X-API-Key 鉴权，APP_API_KEY 留空时放行；/health 豁免）
+_api_key_dep = [Depends(require_api_key)]
+app.include_router(chat_router, prefix="/v1/chat", dependencies=_api_key_dep)
+app.include_router(chat_sessions_router, prefix="/v1/chat/sessions", dependencies=_api_key_dep)
+app.include_router(agents_router, prefix="/v1/agents", dependencies=_api_key_dep)
+app.include_router(tools_router, prefix="/v1/tools", dependencies=_api_key_dep)
+app.include_router(skills_router, prefix="/v1/skills", dependencies=_api_key_dep)
+app.include_router(output_schemas_router, prefix="/v1/schemas", dependencies=_api_key_dep)
+app.include_router(crews_router, prefix="/v1/crews", dependencies=_api_key_dep)
+app.include_router(documents_router, prefix="/v1/documents", dependencies=_api_key_dep)
+app.include_router(approvals_router, prefix="/v1/approvals", dependencies=_api_key_dep)
+app.include_router(memories_router, prefix="/v1/memories", dependencies=_api_key_dep)

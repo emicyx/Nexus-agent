@@ -4,7 +4,7 @@ from typing import Any
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from app.tools._file_utils import resolve_output_path
+from app.tools._file_utils import SandboxViolation, resolve_output_path
 
 
 class CodeWriterInput(BaseModel):
@@ -40,6 +40,9 @@ class CodeWriterTool(BaseTool):
     ) -> str:
         if not filename:
             return "错误：filename 不能为空"
-        path = resolve_output_path(filename, sub_dir)
+        try:
+            path = resolve_output_path(filename, sub_dir)
+        except SandboxViolation as e:
+            return f"拒绝写入：{e}"
         path.write_text(content, encoding="utf-8")
         return f"代码已写入: {path}"

@@ -2,10 +2,11 @@
 import base64
 import logging
 from typing import Any
-from pathlib import Path
 
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
+
+from app.tools._file_utils import SandboxViolation, resolve_read_path
 
 logger = logging.getLogger("add_image")
 
@@ -14,13 +15,23 @@ class AddImageToolLocalSchema(BaseModel):
     """与 CrewAI AddImageTool 的 schema 保持一致。"""
     image_url: str = Field(
         ...,
-        description="The URL or path of the image to add",
+        description=(
+            "The URL or path of the image to add"
+            "（本地路径受沙箱限制，仅能读取 /app/data/ 内文件，如截图 'screenshots/xx.png'）"
+        ),
     )
 
 
 def _local_path_to_base64_data_url(image_url: str) -> str | None:
-    """若 image_url 为本地文件路径，则读取并转为 data URL；否则返回 None。"""
-    path = Path(image_url).expanduser().resolve()
+    """若 image_url 为本地文件路径，则读取并转为 data URL；否则返回 None。
+
+    本地读取受沙箱限制：仅允许读取白名单目录（/app/data/ 等）内的文件。
+    """
+    try:
+        path = resolve_read_path(image_url)
+    except SandboxViolation:
+        logger.warning("sandbox violation reading image: %s", image_url)
+        return None
     if not path.is_file():
         logger.warning("path is not a file: %s", path)
         return None
