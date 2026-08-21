@@ -9,6 +9,7 @@
   现统一收敛到此处，避免多个独立连接池）
 """
 import logging
+import threading
 
 from sqlalchemy import create_engine, text as sa_text
 from sqlalchemy.ext.asyncio import (
@@ -41,6 +42,13 @@ engine = create_async_engine(
     pool_pre_ping=True,
     echo=False,
     future=True,
+    # 显式连接池参数（默认 5+10 偏小且不回收长连接）：
+    # API 层并发 + SSE 长请求下取 10+20；半小时回收防防火墙/DB 侧静默断连
+    # （pre_ping 已兜底，recycle 双保险）。
+    pool_size=10,
+    max_overflow=20,
+    pool_timeout=30,
+    pool_recycle=1800,
 )
 
 AsyncSessionLocal = async_sessionmaker(
@@ -76,6 +84,10 @@ async def init_db() -> None:
 
 _sync_engine = None
 _SyncSessionLocal: sessionmaker | None = None
+# 惰性初始化锁：多个 worker 线程（LTM 提取 / kb_ingest / rag_search /
+# STM 摘要）并发首调时，无锁会创建多个 engine，被覆盖的旧 engine
+# 连接池泄漏。双检 + 模块级锁。
+_sync_init_lock = threading.Lock()
 
 
 def _make_sync_dsn(dsn: str) -> str:
@@ -93,13 +105,36 @@ def get_sync_session() -> Session:
     """
     global _sync_engine, _SyncSessionLocal
     if _SyncSessionLocal is None:
-        _sync_engine = create_engine(
-            _make_sync_dsn(settings.POSTGRES_DSN),
-            pool_pre_ping=True,
-            future=True,
-        )
-        _SyncSessionLocal = sessionmaker(bind=_sync_engine, expire_on_commit=False)
+        with _sync_init_lock:
+            if _SyncSessionLocal is None:
+                _sync_engine = create_engine(
+                    _make_sync_dsn(settings.POSTGRES_DSN),
+                    pool_pre_ping=True,
+                    future=True,
+                    # worker 线程并发低于 API 层，取默认量级并显式声明：
+                    # 5 常驻 + 10 溢出，半小时回收。
+                    pool_size=5,
+                    max_overflow=10,
+                    pool_timeout=30,
+                    pool_recycle=1800,
+                )
+                _SyncSessionLocal = sessionmaker(
+                    bind=_sync_engine, expire_on_commit=False
+                )
     return _SyncSessionLocal()
+
+
+async def dispose_engines() -> None:
+    """优雅停机（B4）：释放异步与同步引擎的连接池。"""
+    global _sync_engine, _SyncSessionLocal
+    await engine.dispose()
+    logger.info("async engine disposed")
+    with _sync_init_lock:
+        if _sync_engine is not None:
+            _sync_engine.dispose()
+            _sync_engine = None
+            _SyncSessionLocal = None
+            logger.info("sync engine disposed")
 
 
 def vec_to_sql_literal(vec: list[float]) -> str:

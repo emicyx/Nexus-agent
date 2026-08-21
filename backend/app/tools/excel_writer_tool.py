@@ -1,4 +1,5 @@
 """Excel 编写工具：生成 .xlsx 文件。"""
+import logging
 from typing import Any
 
 from crewai.tools import BaseTool
@@ -6,6 +7,25 @@ from openpyxl import Workbook
 from pydantic import BaseModel, Field
 
 from app.tools._file_utils import SandboxViolation, resolve_output_path
+
+logger = logging.getLogger("excel_tool")
+
+# 公式注入防护：以这些字符开头的字符串单元格在 Excel/WPS 中可能被求值
+# （=WEBSERVICE / =HYPERLINK / +cmd 等），数据源可能是抓取的网页内容。
+# 处理方式：强制按文本类型写出（openpyxl 对 '=' 开头字符串会自动推断为
+# 公式单元格，显式改回 's' 后按共享字符串存储，Excel 打开不求值，数据不变）。
+_FORMULA_PREFIXES = ("=", "+", "-", "@", "\t", "\r")
+
+
+def _sanitize_formula_cells(ws) -> int:
+    """把公式注入风险的单元格强制为文本类型，返回处理数量。"""
+    fixed = 0
+    for row in ws.iter_rows():
+        for cell in row:
+            if isinstance(cell.value, str) and cell.value.startswith(_FORMULA_PREFIXES):
+                cell.data_type = "s"
+                fixed += 1
+    return fixed
 
 
 class ExcelWriterInput(BaseModel):
@@ -57,6 +77,9 @@ class ExcelWriterTool(BaseTool):
         ws.title = sheet_name
         for row in data:
             ws.append(row)
+        fixed = _sanitize_formula_cells(ws)
+        if fixed:
+            logger.info("excel: %d 个疑似公式单元格已强制为文本（防注入）", fixed)
 
         try:
             path = resolve_output_path(filename, sub_dir)

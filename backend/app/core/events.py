@@ -34,7 +34,7 @@ class AgentEvent:
     tool: str | None = None        # 工具名（tool_call / tool_result 事件）
     input: Any | None = None       # 工具输入（tool_call 事件）
     output: Any | None = None      # 工具输出（tool_result 事件）
-    error_kind: str | None = None  # error 事件分类（token_limit/rate_limit/auth/timeout/network/server/unknown）
+    error_kind: str | None = None  # error 事件分类（token_limit/rate_limit/auth/timeout/network/server/budget_exceeded/unknown）
     ts: float = field(default_factory=time.time)
 
 
@@ -42,6 +42,41 @@ def format_sse(event: AgentEvent) -> str:
     """将 AgentEvent 格式化为 SSE 字符串。"""
     payload = {k: v for k, v in asdict(event).items() if v is not None}
     return f"event: {event.type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
+# 队列满时被丢弃的事件计数（/metrics 暴露，观察慢客户端压力）
+_dropped_event_count = 0
+
+
+def dropped_event_count() -> int:
+    return _dropped_event_count
+
+
+def try_put(
+    queue: "asyncio.Queue[AgentEvent | None]",
+    event: "AgentEvent | None",
+) -> bool:
+    """非阻塞投递；队列满时丢弃最旧事件后重试（A3 慢客户端背压保护）。
+
+    普通事件（工具/思考/token，丢了只影响实时性）与断连兜底的 None 哨兵走这里；
+    final_answer / error / 正常结束的哨兵由 producer 用 `await queue.put()` 投递，
+    自带背压，不受丢弃策略影响。
+    """
+    global _dropped_event_count
+    try:
+        queue.put_nowait(event)
+        return True
+    except asyncio.QueueFull:
+        try:
+            queue.get_nowait()  # 丢最旧
+        except asyncio.QueueEmpty:
+            return False
+        _dropped_event_count += 1
+        try:
+            queue.put_nowait(event)
+            return True
+        except asyncio.QueueFull:
+            return False
 
 
 async def event_stream(

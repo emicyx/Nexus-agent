@@ -1,6 +1,10 @@
 /** @type {import('next').NextConfig} */
-// 注：曾有 /v1/* rewrites 代理，但 api-client.ts 始终直连绝对 API_BASE，
-// 代理从未被使用（死代码），已移除。如需同源代理再恢复并改用相对路径。
-const nextConfig = {};
+// P0-1/P0-2：standalone 输出（生产镜像只带 server.js + 最小依赖）。
+// /v1/* 同源代理由 app/v1/[...path]/route.ts 实现（服务端持 API Key + SSE 流式透传），
+// 浏览器一律相对路径请求，无需在此配置 rewrites。
+const nextConfig = {
+  output: "standalone",
+  poweredByHeader: false,
+};
 
 module.exports = nextConfig;

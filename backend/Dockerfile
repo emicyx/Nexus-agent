@@ -3,7 +3,9 @@ FROM python:3.11-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONPATH=/app \
     PYTHONUTF8=1 \
-    PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright/
+    PLAYWRIGHT_DOWNLOAD_HOST=https://npmmirror.com/mirrors/playwright/ \
+    # 浏览器装到系统目录（非 /root/.cache）：非 root 运行用户也需要可读
+    PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright
 
 WORKDIR /app
 
@@ -32,6 +34,13 @@ RUN pip install --no-cache-dir -r requirements.txt \
 
 COPY . .
 
+# P1-10：非 root 运行（uid/gid 1000 与常见云主机用户对齐，便于 data 目录授权）
+RUN useradd -m -u 1000 appuser \
+    && mkdir -p /app/data \
+    && chown -R appuser:appuser /app/data
+USER appuser
+
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# 生产启动：无 --reload（热重载不进生产；SSE/运行注册表为进程内存态，单 worker）
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000"]

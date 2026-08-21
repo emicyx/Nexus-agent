@@ -160,8 +160,8 @@ def summarize_session_async(session_id: int) -> None:
     """后台线程 fire-and-forget：刷新会话滚动摘要。"""
     try:
         _stm_summary_executor.submit(_run_summary_refresh, session_id)
-    except Exception as e:
-        logger.warning(f"stm summary submit failed: {e}")
+    except Exception:
+        logger.exception("stm summary submit failed")
 
 
 def _run_summary_refresh(session_id: int) -> None:
@@ -170,10 +170,10 @@ def _run_summary_refresh(session_id: int) -> None:
     try:
         from sqlalchemy import select
 
+        from app.db.session import get_sync_session
         from app.models import ChatMessage, ChatSessionSummary
-        from app.services.memory_ltm import _get_sync_session
 
-        with _get_sync_session() as db:
+        with get_sync_session() as db:
             row = db.execute(
                 select(ChatSessionSummary).where(
                     ChatSessionSummary.session_id == session_id
@@ -221,4 +221,4 @@ def _run_summary_refresh(session_id: int) -> None:
                 len(new_summary), max_id,
             )
     except Exception as e:
-        logger.warning(f"stm summary failed: {e}")
+        logger.exception("stm summary failed")

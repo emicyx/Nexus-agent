@@ -16,7 +16,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # 与 backend/Dockerfile 的 python:3.11-slim 对齐（测试运行时=交付运行时）
+          python-version: "3.11"
           cache: pip
       - name: Install dependencies
         run: |
@@ -31,13 +32,15 @@ jobs:
     timeout-minutes: 25
     env:
       QWEN_API_KEY: sk-ci-dummy
-      POSTGRES_DSN: postgresql://nexus:nexus@localhost:5432/nexus
+      # 用应用账号（非 superuser）连接：顺带验证 init.sh 的授权是否充分
+      POSTGRES_DSN: postgresql://nexus_app:nexus_app@localhost:5432/nexus
       REDIS_URL: redis://localhost:6379/0
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          # 与 backend/Dockerfile 的 python:3.11-slim 对齐（测试运行时=交付运行时）
+          python-version: "3.11"
           cache: pip
       - name: Install dependencies
         run: |
@@ -55,6 +58,11 @@ jobs:
             sleep 5
           done
           exit 1
+      # 迁移链验证：0001→head 必须能在干净库上完整执行
+      # （此前 create_all 掩盖了模型与迁移漂移，如 chat_session_summaries 曾缺迁移）
+      - name: Verify alembic migrations on clean DB
+        working-directory: backend
+        run: alembic upgrade head
       - name: Run integration tests
         run: python -m pytest testing/integration -q
 

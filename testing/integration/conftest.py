@@ -4,6 +4,15 @@
 init_db + ensure_seed + LLM warmup。所有请求走同一事件循环，规避 SQLAlchemy
 async engine 跨 loop 复用问题。全程 Mock AliyunLLM.call + embedding，零真实 LLM 成本。
 """
+import os
+
+# 集成测试依赖种子数据（演示 Agent/工具列表等断言）。
+# SEED_DEMO_DATA 生产默认已改为 false，必须在导入 app.config 之前显式开启。
+os.environ.setdefault("SEED_DEMO_DATA", "true")
+# 限流会让"同一分钟内重复跑测试"撞 429（Redis 计数跨会话累计），测试显式关闭
+os.environ.setdefault("CHAT_RATE_LIMIT_PER_MIN", "0")
+os.environ.setdefault("MAX_CONCURRENT_RUNS", "0")
+
 import pytest
 from fastapi.testclient import TestClient
 

@@ -1,0 +1,7 @@
+# 构建上下文裁剪（P1-10）：依赖/构建产物/密钥不进镜像层
+node_modules/
+.next/
+.env
+.env.*
+*.tsbuildinfo
+npm-debug.log*

@@ -212,7 +212,7 @@ Alembic 迁移 0001-0007。启动时 `create_all + ensure_seed` 自动建表/种
 | 机制 | 位置 | 说明 |
 |---|---|---|
 | 文件沙箱 | `tools/_file_utils.py` | 读写强制 containment：写仅 `{SANDBOX_DATA_DIR}/outputs/**`，读限 `SANDBOX_DATA_DIR/**` + `SANDBOX_EXTRA_READ_DIRS` 白名单；越界抛 `SandboxViolation`，工具返回错误串 |
-| API 鉴权 | `core/security.py` + `main.py` | `X-API-Key` 静态密钥（`APP_API_KEY`），空值放行+启动告警；全部 `/v1/*` 挂依赖，`/health` 豁免；前端 `NEXT_PUBLIC_API_KEY` 自动透传 |
+| API 鉴权 | `core/security.py` + `main.py` | `X-API-Key` 静态密钥（`APP_API_KEY`），空值放行+启动告警；全部 `/v1/*` 挂依赖，`/health` 豁免；生产缺密钥拒绝启动；前端经 Next 同源代理（`/v1/[...path]`）服务端注入密钥+可选访问密码门（`APP_ACCESS_PASSWORD`），浏览器不持有凭据 |
 | SSRF 防护 | `core/net_guard.py` | `validate_public_url`（scheme 白名单 + DNS 全量解析拒私网/环回/链路本地）+ `safe_get_with_redirects`（重定向逐跳校验）；fetch_url 与 navigate 均接入；`SSRF_ALLOW_PRIVATE_NETWORK` 逃生门 |
 | 日志脱敏 | `llm/aliyun_llm.py` | INFO 级只记消息 role/长度与响应摘要；完整报文仅 DEBUG（guarded） |
 | 部署口令 | `docker-compose.yml` | postgres 口令与 DSN 走 `${POSTGRES_PASSWORD:-nexus}` 注入；端口映射按部署决定保留 |

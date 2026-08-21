@@ -34,6 +34,8 @@ from crewai.utilities.agent_utils import (
     is_context_length_exceeded,
 )
 
+from app.core.run_control import raise_if_cancelled
+
 logger = logging.getLogger("crews.crewai_async_patch")
 
 _patch_applied = False
@@ -59,6 +61,9 @@ async def _ainvoke_loop_native_tools_async(self: Any) -> AgentFinish:
     )
 
     while True:
+        # A1 取消检查点：客户端断连后不再发起下一轮 LLM 请求（省一次计费调用）。
+        # RunCancelledError 是 BaseException，不会被下方 except Exception 吞掉。
+        raise_if_cancelled()
         try:
             if has_reached_max_iterations(self.iterations, self.max_iter):
                 formatted_answer = handle_max_iterations_exceeded(
@@ -199,7 +204,7 @@ def apply_async_tool_patch() -> bool:
             _ainvoke_loop_native_tools_async,
         )
     except Exception as e:  # noqa: BLE001
-        logger.warning("apply native-tool async patch 失败: %s", e)
+        logger.exception("apply native-tool async patch 失败")
         return False
 
     _patch_applied = True

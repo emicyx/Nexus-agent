@@ -1,0 +1,10 @@
+# 构建上下文裁剪（P1-10）：数据/密钥/缓存不进镜像层
+data/
+data
+.env
+.env.*
+__pycache__/
+*.pyc
+.pytest_cache/
+.git/
+.venv/

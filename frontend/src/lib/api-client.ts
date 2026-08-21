@@ -23,14 +23,26 @@ export type ChatEvent =
   | { type: "error"; content: string; error_kind?: string }
   | { type: "done" };
 
-const API_BASE =
-  process.env.NEXT_PUBLIC_API_BASE || "http://localhost:8000";
+// P0-1：默认同源相对路径——浏览器请求发给 Next 自身，由 /v1/[...path] 服务端
+// 代理转发到后端（BACKEND_ORIGIN）。部署到任意域名 / HTTPS 反代后无需改配置，
+// 也没有混合内容问题。显式设置 NEXT_PUBLIC_API_BASE 时回到直连模式（本地调试用）。
+const API_BASE = process.env.NEXT_PUBLIC_API_BASE || "";
 
-// 后端 X-API-Key 静态鉴权（与 .env 的 APP_API_KEY 对应，留空则不发）
+// 直连模式可选密钥（默认同源代理模式下密钥由服务端注入，浏览器不持有）
 const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
 
 function authHeaders(): Record<string, string> {
   return API_KEY ? { "X-API-Key": API_KEY } : {};
+}
+
+/** 401 → 登录页（代理登录门未通过 / 直连模式密钥错误）。 */
+function handle401(): void {
+  if (
+    typeof window !== "undefined" &&
+    !window.location.pathname.startsWith("/login")
+  ) {
+    window.location.href = "/login";
+  }
 }
 
 /**
@@ -55,6 +67,7 @@ export async function* streamChat(
   });
 
   if (!res.ok || !res.body) {
+    if (res.status === 401) handle401();
     throw new Error(`HTTP ${res.status}: ${await res.text()}`);
   }
 
@@ -198,6 +211,7 @@ async function jsonRequest<T>(url: string, opts: RequestInit = {}): Promise<T> {
     headers: { "Content-Type": "application/json", ...authHeaders(), ...opts.headers },
   });
   if (!res.ok) {
+    if (res.status === 401) handle401();
     throw new Error(`HTTP ${res.status}: ${await res.text()}`);
   }
   return res.status === 204 ? (undefined as T) : ((await res.json()) as T);
@@ -325,7 +339,10 @@ export async function uploadDocumentFile(file: File, name?: string): Promise<Doc
     headers: authHeaders(),
     body: form,
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+  if (!res.ok) {
+    if (res.status === 401) handle401();
+    throw new Error(`HTTP ${res.status}: ${await res.text()}`);
+  }
   return (await res.json()) as DocumentRead;
 }
 

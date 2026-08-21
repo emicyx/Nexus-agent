@@ -13,6 +13,7 @@
 """
 import os
 import re
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -20,10 +21,20 @@ from typing import Any, Callable
 
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
-from playwright.sync_api import sync_playwright, Page, TimeoutError as PlaywrightTimeout
+from playwright.sync_api import (
+    Route as PlaywrightRoute,
+    Page,
+    TimeoutError as PlaywrightTimeout,
+    sync_playwright,
+)
+from urllib.parse import urlsplit
 
 from app.config import settings
 from app.core.net_guard import validate_public_url
+
+import logging
+
+logger_net = logging.getLogger("net_guard.playwright")
 
 # ── 全局配置 ──────────────────────────────────────────────────────────────────
 
@@ -40,22 +51,81 @@ def _screenshots_dir() -> Path:
     return Path(settings.SANDBOX_DATA_DIR) / "screenshots"
 
 
+# ── 浏览器路径 SSRF 守卫（P1）──────────────────────────────────────────
+
+def _url_allowed(url: str) -> bool:
+    """URL 是否允许浏览器访问。仅校验 http(s)；data:/blob:/about: 等放行。"""
+    scheme = urlsplit(url).scheme.lower()
+    if scheme not in ("http", "https"):
+        return True
+    try:
+        validate_public_url(url)
+        return True
+    except ValueError:
+        return False
+
+
+def _install_page_guard(page: Page) -> None:
+    """浏览器路径 SSRF 防护：拦截该 page 的所有 http(s) 请求。
+
+    requests 路径靠「逐跳校验 + DNS pin」闭合；浏览器自带解析器无法注入
+    pin，且 goto 自动跟随的重定向 / meta-refresh / JS 跳转 / 点击表单导航
+    都不再走入口校验。这里用 page.route 在每个请求（含子资源）发起前做
+    同步 DNS 校验，目标解析到内网/环回/链路本地即 abort——把守卫从
+    "导航入口一次" 收敛到 "每个网络请求"。getaddrinfo 的毫秒级开销在
+    agent 用量级下可接受。
+    """
+    def _route_handler(route: PlaywrightRoute) -> None:
+        url = route.request.url
+        if _url_allowed(url):
+            route.continue_()
+        else:
+            logger_net.warning("playwright ssrf guard: 拦截内网/非法请求 %s", url)
+            route.abort("blocked by ssrf guard")
+
+    page.route("**/*", _route_handler)
+
+
 # ── BrowserManager ─────────────────────────────────────────────────────────────
 
 class BrowserManager:
     """
-    全局 Playwright 浏览器实例管理器。
+    Playwright 浏览器实例管理器（每线程一个实例）。
+
+    背景：Playwright sync API 对象绑定创建线程，跨线程使用会抛 greenlet 错误。
+    工具经 crewai_async_patch 被 asyncio.to_thread 丢进默认线程池，
+    不同并发会话可能落在不同 worker 线程——此前类级单例会随机崩溃。
+    现改为 threading.local 惰性创建：每个用过浏览器工具的线程各持一个实例，
+    全部登记到注册表，close_all() 供优雅停机统一回收（否则 chromium/node
+    driver 子进程会成为孤儿）。
 
     - headless 可配置（默认 True，调试时可设为 False）
     - viewport 固定为 1920x1080
     - 全局默认超时 30s
     - 操作间隔 action_delay（默认 0.5s）
     """
-    _playwright = None
-    _browser = None
-    _page = None
+    # 实例注册表：close_all 用（线程本地实例本身不持有"所在线程"信息以外的全局态）
+    _instances: list["BrowserManager"] = []
+    _registry_lock = threading.Lock()
+    _tls = threading.local()
     _headless = True
     _action_delay = ACTION_DELAY
+
+    def __init__(self):
+        self._closed = False
+        self._playwright = sync_playwright().start()
+        # --no-sandbox：容器内以非 root 运行时，chromium 的 seccomp/userns
+        # 沙箱在默认 Docker seccomp profile 下无法启用（P1-10 配套）；
+        # --disable-dev-shm-usage：Docker 默认 /dev/shm=64MB，chromium 会崩溃
+        self._browser = self._playwright.chromium.launch(
+            headless=BrowserManager._headless,
+            args=["--no-sandbox", "--disable-dev-shm-usage"],
+        )
+        self._page = self._browser.new_page(viewport=DEFAULT_VIEWPORT)
+        self._page.set_default_timeout(DEFAULT_TIMEOUT)
+        # P1 SSRF 守卫：该 page 的所有网络请求（重定向/JS 跳转/点击导航/子资源）
+        # 逐请求校验，内网目标直接 abort
+        _install_page_guard(self._page)
 
     @classmethod
     def configure(cls, headless: bool = True, action_delay: float = ACTION_DELAY):
@@ -65,26 +135,48 @@ class BrowserManager:
 
     @classmethod
     def get_page(cls) -> Page:
-        if cls._page is None:
-            cls._playwright = sync_playwright().start()
-            cls._browser = cls._playwright.chromium.launch(headless=cls._headless)
-            cls._page = cls._browser.new_page(viewport=DEFAULT_VIEWPORT)
-            cls._page.set_default_timeout(DEFAULT_TIMEOUT)
-        return cls._page
+        """当前线程的 page（无则启动浏览器创建）。只在调用线程内使用返回值。"""
+        mgr: BrowserManager | None = getattr(cls._tls, "manager", None)
+        if mgr is None or mgr._closed:
+            mgr = BrowserManager()
+            cls._tls.manager = mgr
+            with cls._registry_lock:
+                cls._instances.append(mgr)
+        return mgr._page
 
     @classmethod
     def delay(cls):
         """操作间隔，避免操作过快导致页面未响应。"""
         time.sleep(cls._action_delay)
 
+    def _close(self) -> None:
+        if self._closed:
+            return
+        self._closed = True
+        try:
+            self._browser.close()
+        finally:
+            self._playwright.stop()
+
     @classmethod
-    def close(cls):
-        if cls._browser:
-            cls._browser.close()
-            cls._playwright.stop()
-            cls._page = None
-            cls._browser = None
-            cls._playwright = None
+    def close_all(cls) -> int:
+        """关闭全部线程本地实例（优雅停机调用）。返回成功关闭数。
+
+        从非属主线程关闭 sync API 对象可能抛错，逐个 best-effort，
+        不让单个失败中断其余回收。
+        """
+        with cls._registry_lock:
+            instances = list(cls._instances)
+            cls._instances.clear()
+        closed = 0
+        for m in instances:
+            try:
+                m._close()
+                closed += 1
+            except Exception:
+                pass
+        return closed
+
 
 
 # ── 工具函数 ─────────────────────────────────────────────────────────────────
@@ -179,7 +271,18 @@ class NavigateTool(BaseTool):
             validate_public_url(url)
         except ValueError as e:
             return f"拒绝导航：{e}"
-        return _safe_execute(operation, f"导航到 {url}")
+        result = _safe_execute(operation, f"导航到 {url}")
+        # 终点复核：route 守卫覆盖绝大多数跳转路径，这里兜底检查 goto 完成后的
+        # 最终 URL（如守卫因浏览器内部机制未拦截到的跳转），不安全则导航离开
+        page = BrowserManager.get_page()
+        if BrowserManager._tls.manager is not None and not _url_allowed(page.url):
+            blocked = page.url
+            try:
+                page.goto("about:blank")
+            except Exception:
+                pass
+            return f"拒绝导航：页面跳转到了不安全目标（{blocked}），已中止并离开该页面"
+        return result
 
 
 # ── 工具 2: 点击元素 ────────────────────────────────────────────────────────

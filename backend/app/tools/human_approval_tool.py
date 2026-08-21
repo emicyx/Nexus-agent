@@ -16,7 +16,8 @@ from typing import Any
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from app.core.events import AgentEvent
+from app.core.events import AgentEvent, try_put
+from app.core.run_control import RunCancelledError, is_cancelled
 from app.db.redis import (
     get_approval_sync,
     set_approval_pending_sync,
@@ -25,9 +26,21 @@ from app.db.redis import (
 
 logger = logging.getLogger("hitl")
 
-# 默认超时（秒）：前端 120s 超时，工具 60s 兜底（给用户足够但不夸张的决策时间）
-DEFAULT_TIMEOUT = 60
+# 超时（秒）：前端审批卡片 120s 过期，工具侧必须更长（用户还在决策时后端
+# 不能先 TIMEOUT）。取 150s = 前端窗口 + 30s 余量，覆盖跨端补批/网络延迟。
+# Redis 侧 TTL 300s > 150s，审批单不会在等待中途过期。
+DEFAULT_TIMEOUT = 150
 POLL_INTERVAL = 1.0
+
+
+def _cancel_pending_approval(approval_id: str) -> None:
+    """A1：客户端断连时把 PENDING 审批单置为 CANCELLED（前端待审列表不悬挂）。"""
+    try:
+        state = get_approval_sync(approval_id)
+        if state and state.get("status") == "PENDING":
+            update_approval_sync(approval_id, "CANCELLED", "客户端断开连接，等待中止")
+    except Exception:
+        logger.debug("approval cancel mark failed: %s", approval_id, exc_info=True)
 
 
 def _safe_put(queue: "asyncio.Queue[AgentEvent | None]", evt: AgentEvent, loop: asyncio.AbstractEventLoop) -> None:
@@ -35,8 +48,9 @@ def _safe_put(queue: "asyncio.Queue[AgentEvent | None]", evt: AgentEvent, loop: 
 
     Crew 执行在 thread pool 中运行，不在事件循环线程，必须用
     call_soon_threadsafe 投递到事件循环线程 push，避免数据竞争。
+    队列有界（A3）：满时丢最旧事件。
     """
-    loop.call_soon_threadsafe(queue.put_nowait, evt)
+    loop.call_soon_threadsafe(try_put, queue, evt)
 
 
 class HumanApprovalInput(BaseModel):
@@ -149,10 +163,14 @@ class HumanApprovalTool(BaseTool):
         deadline = created_at + self.timeout
         while time.time() < deadline:
             time.sleep(POLL_INTERVAL)
+            # A1 取消检查点：客户端断连后立即结束等待，不再白等到超时
+            if is_cancelled():
+                _cancel_pending_approval(approval_id)
+                raise RunCancelledError()
             try:
                 state = get_approval_sync(approval_id)
             except Exception as e:
-                logger.warning(f"redis_get_failed: {e}")
+                logger.exception("redis_get_failed")
                 continue
 
             if state is None:
@@ -172,4 +190,8 @@ class HumanApprovalTool(BaseTool):
         # 超时
         logger.warning(f"approval_timeout: id={approval_id}")
         update_approval_sync(approval_id, "TIMEOUT", "自动超时未响应")
-        return f"审批超时（{self.timeout}秒无响应），操作未执行：{action}。请稍后重试或联系管理员。"
+        return (
+            f"审批超时（{self.timeout}秒无响应），操作未执行：{action}。"
+            "重要：本轮请勿再次调用 human_approval 重复请求审批（用户不在），"
+            "应基于已有信息继续完成任务，或直接给出最终回答并说明该操作未获批准。"
+        )

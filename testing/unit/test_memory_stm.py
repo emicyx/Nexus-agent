@@ -131,3 +131,86 @@ def test_summarize_text_merges(monkeypatch):
     assert "已有摘要" in calls["messages"][1]["content"]
     assert "偏好中文回答" in calls["messages"][1]["content"]
     assert "明天提交" in calls["messages"][1]["content"]
+
+
+# ---------- 滚动摘要刷新（_run_summary_refresh） ----------
+
+def test_run_summary_refresh_end_to_end(monkeypatch):
+    """全链路：查摘要行 → 查消息 → 增量 batch → LLM 合并 → 落库 commit。
+
+    回归背景：该函数曾 import 不存在的 `_get_sync_session`，每次启动即
+    ImportError 被外层吞掉——STM 滚动摘要整体静默失效。
+    """
+    from types import SimpleNamespace
+    from app.db import session as db_session
+    import app.services.memory_stm as stm
+
+    class _Result:
+        def __init__(self, value):
+            self._value = value
+
+        def scalar_one_or_none(self):
+            return self._value
+
+        def scalars(self):
+            return self
+
+        def all(self):
+            return self._value
+
+    class FakeDB:
+        def __init__(self):
+            self.results = []       # 按调用顺序弹出的查询结果
+            self.added = None
+            self.committed = False
+
+        def execute(self, *_args, **_kwargs):
+            return self.results.pop(0)
+
+        def add(self, obj):
+            self.added = obj
+
+        def commit(self):
+            self.committed = True
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_exc):
+            return False
+
+    fake = FakeDB()
+    # 第一次查询：无已有摘要行；第二次：8 条消息（前 2 条已滑出窗口）
+    fake.results = [
+        _Result(None),
+        _Result([
+            SimpleNamespace(id=i, role="user" if i % 2 == 0 else "assistant",
+                            content=f"消息{i}")
+            for i in range(1, 9)
+        ]),
+    ]
+    monkeypatch.setattr(db_session, "get_sync_session", lambda: fake)
+    monkeypatch.setattr(stm, "summarize_text", lambda prev, new: "新滚动摘要")
+
+    stm._run_summary_refresh(session_id=42)
+
+    assert fake.committed
+    assert fake.added is not None
+    assert fake.added.session_id == 42
+    assert fake.added.summary == "新滚动摘要"
+    assert fake.added.last_message_id == 2  # batch 最后一条（滑出窗口的第 2 条）
+
+
+def test_run_summary_refresh_import_path_valid():
+    """函数体内的延迟 import 必须真实可解析（防再次引入名字错误）。"""
+    import importlib
+
+    import app.db.session as db_session
+    import app.services.memory_stm as stm
+
+    importlib.reload(db_session)
+    assert hasattr(db_session, "get_sync_session")
+    # memory_stm 源码不再引用不存在的 _get_sync_session
+    import inspect
+    src = inspect.getsource(stm._run_summary_refresh)
+    assert "_get_sync_session" not in src

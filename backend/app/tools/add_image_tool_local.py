@@ -17,7 +17,7 @@ class AddImageToolLocalSchema(BaseModel):
         ...,
         description=(
             "The URL or path of the image to add"
-            "（本地路径受沙箱限制，仅能读取 /app/data/ 内文件，如截图 'screenshots/xx.png'）"
+            "（本地路径受沙箱限制，仅能读取 outputs/ 与 screenshots/ 内文件，如截图 'screenshots/xx.png'）"
         ),
     )
 

@@ -1,11 +1,15 @@
-"""健康检查端点测试。"""
+"""健康检查端点测试（A7：真实探活 DB + Redis）。"""
 from fastapi.testclient import TestClient
 
 
 def test_health(client: TestClient):
     r = client.get("/health")
     assert r.status_code == 200
-    assert r.json() == {"status": "ok"}
+    body = r.json()
+    assert body["status"] == "ok"
+    # A7：必须真的探到 DB 和 Redis，而不是静态返回 ok
+    assert body["checks"]["db"] == "ok"
+    assert body["checks"]["redis"] == "ok"
 
 
 def test_root_openapi_available(client: TestClient):

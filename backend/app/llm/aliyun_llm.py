@@ -34,6 +34,13 @@ import httpx
 import requests
 from crewai import BaseLLM
 
+from app.core.token_budget import (
+    arecord_result_usage,
+    arecord_usage,
+    record_result_usage,
+    record_usage,
+)
+
 
 def _get_logger():
     """获取模块级 logger。"""
@@ -69,10 +76,11 @@ class _StreamContext:
 
     def on_token(self, token: str) -> None:
         """推送 thinking_token + 可选 token 事件到 SSE 队列（线程安全）。"""
-        from app.core.events import AgentEvent
+        from app.core.events import AgentEvent, try_put
         try:
             self.loop.call_soon_threadsafe(
-                self.queue.put_nowait,
+                try_put,
+                self.queue,
                 AgentEvent(
                     type="thinking_token",
                     content=token,
@@ -82,7 +90,8 @@ class _StreamContext:
             )
             if self.route_to_answer:
                 self.loop.call_soon_threadsafe(
-                    self.queue.put_nowait,
+                    try_put,
+                    self.queue,
                     AgentEvent(type="token", content=token),
                 )
         except RuntimeError:
@@ -512,6 +521,8 @@ class AliyunLLM(BaseLLM):
                     response.raise_for_status()
 
                 result = response.json()
+                # A2 计量：usage 计入当日预算（内部吞异常，绝不影响调用）
+                record_result_usage(result)
                 if attempt > 0:
                     logger.info(
                         "llm_request_success_after_retry attempt=%s total=%s",
@@ -970,6 +981,8 @@ class AliyunLLM(BaseLLM):
                     resp.raise_for_status()
 
                 result = resp.json()
+                # A2 计量：usage 计入当日预算（内部吞异常，绝不影响调用）
+                await arecord_result_usage(result)
                 if attempt > 0:
                     logger.info(
                         "llm_request_success_after_retry attempt=%s total=%s",
@@ -1044,6 +1057,7 @@ class AliyunLLM(BaseLLM):
         full_text = ""
         tool_calls_acc: dict[int, dict[str, Any]] = {}
         has_tool_calls = False
+        stream_usage: dict[str, Any] | None = None  # A2: 末尾 usage chunk
         client = _get_async_client()
         timeout = httpx.Timeout(connect=30.0, read=float(self.timeout), write=30.0, pool=30.0)
         headers = {
@@ -1057,7 +1071,8 @@ class AliyunLLM(BaseLLM):
                 "POST",
                 self.endpoint,
                 headers=headers,
-                json={**payload, "stream": True},
+                # A2 计量：stream_options.include_usage 让最后一个 chunk 携带 usage
+                json={**payload, "stream": True, "stream_options": {"include_usage": True}},
                 timeout=timeout,
             ) as resp:
                 if resp.status_code != 200:
@@ -1080,6 +1095,9 @@ class AliyunLLM(BaseLLM):
                         chunk = json.loads(data_str)
                     except json.JSONDecodeError:
                         continue
+                    # A2 计量：usage chunk 的 choices 为空，必须在 choices 检查前捕获
+                    if chunk.get("usage"):
+                        stream_usage = chunk["usage"]
                     choices = chunk.get("choices", [])
                     if not choices:
                         continue
@@ -1121,13 +1139,13 @@ class AliyunLLM(BaseLLM):
                     if finish_reason:
                         break
         except httpx.TimeoutException as e:
-            logger.warning("streaming request timed out: %s, falling back to non-streaming", e)
+            logger.exception("streaming request timed out, falling back to non-streaming")
             return await self._afallback_call(payload)
         except httpx.RequestError as e:
-            logger.warning("streaming request failed: %s, falling back to non-streaming", e)
+            logger.exception("streaming request failed, falling back to non-streaming")
             return await self._afallback_call(payload)
         except Exception as e:
-            logger.warning("streaming parse error: %s, partial_text=%d chars", e, len(full_text))
+            logger.exception("streaming parse error, partial_text=%d chars", len(full_text))
             if full_text.strip():
                 logger.info(
                     "timing: llm.acall streaming (partial) %.3fs (model=%s, chars=%d)",
@@ -1137,6 +1155,14 @@ class AliyunLLM(BaseLLM):
                 )
                 return full_text
             return await self._afallback_call(payload)
+
+        # A2 计量：流式 usage（include_usage 的末尾 chunk；中断的流拿不到则不记）
+        if stream_usage:
+            await arecord_usage(
+                stream_usage.get("prompt_tokens"),
+                stream_usage.get("completion_tokens"),
+                stream_usage.get("total_tokens"),
+            )
 
         # 有 tool_calls → 返回与 _ado_call 格式一致的 dict
         if has_tool_calls and tool_calls_acc:
@@ -1192,6 +1218,7 @@ class AliyunLLM(BaseLLM):
                         continue
                     resp.raise_for_status()
                 result = resp.json()
+                await arecord_result_usage(result)  # A2 计量
                 logger.info(
                     "timing: llm.acall non-streaming %.3fs (model=%s)",
                     time.perf_counter() - t0,
@@ -1275,6 +1302,7 @@ class AliyunLLM(BaseLLM):
         full_text = ""
         tool_calls_acc: dict[int, dict[str, Any]] = {}
         has_tool_calls = False
+        stream_usage: dict[str, Any] | None = None  # A2: 末尾 usage chunk
 
         try:
             resp = session.post(
@@ -1284,7 +1312,8 @@ class AliyunLLM(BaseLLM):
                     "Content-Type": "application/json",
                     "Accept": "text/event-stream",
                 },
-                json={**payload, "stream": True},
+                # A2 计量：stream_options.include_usage 让最后一个 chunk 携带 usage
+                json={**payload, "stream": True, "stream_options": {"include_usage": True}},
                 timeout=(30, self.timeout),  # (connect_timeout, read_timeout)
                 stream=True,
             )
@@ -1296,10 +1325,10 @@ class AliyunLLM(BaseLLM):
                 )
                 return self._fallback_call(payload)
         except requests.Timeout:
-            logger.warning("streaming request timed out, falling back to non-streaming")
+            logger.exception("streaming request timed out, falling back to non-streaming")
             return self._fallback_call(payload)
         except requests.RequestException as e:
-            logger.warning("streaming request failed: %s, falling back to non-streaming", e)
+            logger.exception("streaming request failed, falling back to non-streaming")
             return self._fallback_call(payload)
 
         try:
@@ -1315,6 +1344,9 @@ class AliyunLLM(BaseLLM):
                     chunk = json.loads(data_str)
                 except json.JSONDecodeError:
                     continue
+                # A2 计量：usage chunk 的 choices 为空，必须在 choices 检查前捕获
+                if chunk.get("usage"):
+                    stream_usage = chunk["usage"]
                 choices = chunk.get("choices", [])
                 if not choices:
                     continue
@@ -1356,7 +1388,7 @@ class AliyunLLM(BaseLLM):
                 if finish_reason:
                     break
         except Exception as e:
-            logger.warning("streaming parse error: %s, partial_text=%d chars", e, len(full_text))
+            logger.exception("streaming parse error, partial_text=%d chars", len(full_text))
             if full_text.strip():
                 logger.info(
                     "timing: llm.call streaming (partial) %.3fs (model=%s, chars=%d)",
@@ -1366,6 +1398,14 @@ class AliyunLLM(BaseLLM):
                 )
                 return full_text
             return self._fallback_call(payload)
+
+        # A2 计量：流式 usage（include_usage 的末尾 chunk；中断的流拿不到则不记）
+        if stream_usage:
+            record_usage(
+                stream_usage.get("prompt_tokens"),
+                stream_usage.get("completion_tokens"),
+                stream_usage.get("total_tokens"),
+            )
 
         # 有 tool_calls → 返回与 _do_call 格式一致的 dict
         if has_tool_calls and tool_calls_acc:
@@ -1420,6 +1460,7 @@ class AliyunLLM(BaseLLM):
                         continue
                     resp.raise_for_status()
                 result = resp.json()
+                record_result_usage(result)  # A2 计量
                 logger.info(
                     "timing: llm.call non-streaming %.3fs (model=%s)",
                     time.perf_counter() - t0,
@@ -1451,14 +1492,35 @@ class AliyunLLM(BaseLLM):
             return stop
         return None
 
+    # 模型名（小写子串匹配）→ 上下文窗口（输入 token 上限）。
+    # 取值原则：保守且宁高勿低——偏高最多触发一次可恢复的 token_limit 报错
+    # （走熔断提示引导新建对话），偏低会让 CrewAI 过早截断长对话（静默质量损失）。
+    # 原实现全家族硬编码 8192，对 qwen 系严重偏小（qwen-plus 实际 131072，
+    # qwen3-turbo/flash 长上下文版 1M）。查表过时时用 LLM_CONTEXT_WINDOW_OVERRIDE 兜底。
+    _CONTEXT_WINDOW_TABLE: tuple[tuple[str, int], ...] = (
+        ("long", 1_000_000),    # qwen-long：文档标称 10M，取保守 1M
+        ("turbo", 1_000_000),   # qwen-turbo / qwen3-turbo 长上下文
+        ("flash", 1_000_000),   # qwen-flash
+        ("plus", 131_072),      # qwen-plus / qwen3-plus
+        ("max", 131_072),       # qwen-max / qwen3-max（新版本更大，取保守值）
+    )
+    _CONTEXT_WINDOW_DEFAULT = 131_072  # 未知模型默认（8192 会让长对话被过早裁剪）
+
     def get_context_window_size(self) -> int:
-        """根据模型名返回上下文窗口大小（Token 数）。"""
+        """根据模型名返回上下文窗口大小（Token 数）。
+
+        CrewAI 用该值决定上下文裁剪粒度（字符切分窗口），
+        返回过小会导致长对话被过早摘要/截断。
+        """
+        from app.config import settings as app_settings
+
+        if app_settings.LLM_CONTEXT_WINDOW_OVERRIDE > 0:
+            return app_settings.LLM_CONTEXT_WINDOW_OVERRIDE
         m = self.model.lower()
-        if "long" in m:
-            return 200_000
-        if "max" in m or "plus" in m or "turbo" in m or "flash" in m:
-            return 8192
-        return 8192
+        for fragment, size in self._CONTEXT_WINDOW_TABLE:
+            if fragment in m:
+                return size
+        return self._CONTEXT_WINDOW_DEFAULT
 
 
 # 使用示例

@@ -77,6 +77,16 @@ def test_all_kinds_have_advice():
     for kind in (
         llm_errors.KIND_TOKEN_LIMIT, llm_errors.KIND_RATE_LIMIT, llm_errors.KIND_AUTH,
         llm_errors.KIND_TIMEOUT, llm_errors.KIND_NETWORK, llm_errors.KIND_SERVER,
-        llm_errors.KIND_UNKNOWN,
+        llm_errors.KIND_BUDGET_EXCEEDED, llm_errors.KIND_UNKNOWN,
     ):
         assert llm_errors._USER_ADVICE[kind]
+
+
+def test_budget_exceeded_explicit_type_wins():
+    """A2：日预算熔断异常按显式类型分类（优先于文本启发式）。"""
+    from app.core.token_budget import TokenBudgetExceededError
+
+    kind, msg = classify_llm_error(TokenBudgetExceededError(1000, 1200))
+    assert kind == llm_errors.KIND_BUDGET_EXCEEDED
+    assert "预算" in msg
+    assert "明日" in msg

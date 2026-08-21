@@ -107,7 +107,7 @@ def test_redirect_to_private_rejected(monkeypatch):
             return _FakeResp(302, location="http://127.0.0.1:8000/steal")
         return _FakeResp(200)
 
-    monkeypatch.setattr(ng.requests, "get", fake_get)
+    monkeypatch.setattr(ng, "_http_get", fake_get)
     with pytest.raises(ValueError, match="非公网"):
         safe_get_with_redirects("http://93.184.216.34/a")
 
@@ -120,7 +120,7 @@ def test_redirect_chain_public_ok(monkeypatch):
             return _FakeResp(302, location="http://8.8.8.8/c")
         return _FakeResp(200, text="final")
 
-    monkeypatch.setattr(ng.requests, "get", fake_get)
+    monkeypatch.setattr(ng, "_http_get", fake_get)
     resp = safe_get_with_redirects("http://93.184.216.34/a")
     assert resp.status_code == 200
     assert resp.text == "final"
@@ -130,6 +130,113 @@ def test_too_many_redirects_rejected(monkeypatch):
     def fake_get(url, **kwargs):
         return _FakeResp(302, location=url + "x")
 
-    monkeypatch.setattr(ng.requests, "get", fake_get)
+    monkeypatch.setattr(ng, "_http_get", fake_get)
     with pytest.raises(ValueError, match="重定向次数"):
         safe_get_with_redirects("http://93.184.216.34/a", max_redirects=3)
+
+
+# ---------- A5：DNS rebinding 防护（校验后锁定 IP 直连）----------
+
+
+def test_validate_with_pin_registers_ip(monkeypatch):
+    monkeypatch.setattr(ng, "_host_ips", lambda host: ["93.184.216.34", "1.2.3.4"])
+    ng.clear_dns_pins()
+    try:
+        validate_public_url("https://Example.COM/x", pin=True)
+        # 优先 IPv4；key 为小写域名
+        assert ng.get_pinned_ip("example.com") == "93.184.216.34"
+    finally:
+        ng.clear_dns_pins()
+
+
+def test_validate_without_pin_does_not_register(monkeypatch):
+    monkeypatch.setattr(ng, "_host_ips", lambda host: ["93.184.216.34"])
+    ng.clear_dns_pins()
+    try:
+        validate_public_url("https://example.com/x")
+        assert ng.get_pinned_ip("example.com") is None
+    finally:
+        ng.clear_dns_pins()
+
+
+def test_pin_refuses_private_resolution(monkeypatch):
+    # pin 模式下解析到私网 IP 同样被拒（与普通校验一致）
+    monkeypatch.setattr(ng, "_host_ips", lambda host: ["10.0.0.8"])
+    with pytest.raises(ValueError, match="非公网"):
+        validate_public_url("https://rebind.example.com/x", pin=True)
+
+
+def test_pinned_connection_targets_pinned_ip():
+    """自定义连接类的 TCP 目标 = pin 的 IP（Host/SNI 仍用域名）。"""
+    ng.clear_dns_pins()
+    try:
+        ng.set_dns_pin("example.com", "93.184.216.34")
+        pool_cls = ng.PinnedHTTPSPool
+        conn = pool_cls.ConnectionCls(host="example.com", port=443)
+        conn.timeout = 5
+
+        calls = []
+
+        def fake_create(address, *args, **kwargs):
+            calls.append(address)
+            import socket as _s
+
+            return _s.socket()
+
+        original = ng._u3_connection.create_connection
+        ng._u3_connection.create_connection = fake_create
+        try:
+            conn._new_conn()
+        finally:
+            ng._u3_connection.create_connection = original
+
+        assert calls == [("93.184.216.34", 443)]
+        # 域名保留在连接对象上（Host 头 / SNI / 证书校验用）
+        assert conn.host == "example.com"
+    finally:
+        ng.clear_dns_pins()
+
+
+def test_unpinned_host_falls_back_to_normal_resolution():
+    """未登记 pin 的域名走父类默认解析（兼容非 safe_get 路径的普通请求）。"""
+    ng.clear_dns_pins()
+    conn = ng.PinnedHTTPConnection(host="not-pinned.example.com")
+    conn.timeout = 5
+
+    called = []
+
+    def fake_super_new_conn():
+        called.append(True)
+        import socket as _s
+
+        return _s.socket()
+
+    original = ng.urllib3.connection.HTTPConnection._new_conn
+    ng.urllib3.connection.HTTPConnection._new_conn = lambda self: fake_super_new_conn()
+    try:
+        conn._new_conn()
+        assert called == [True]
+    finally:
+        ng.urllib3.connection.HTTPConnection._new_conn = original
+
+
+# ---------- P1-8：SSRF_EXTRA_ALLOW_CIDRS 网段白名单 ----------
+
+def test_cidr_allowlist_permits_whitelisted_private(monkeypatch):
+    """白名单网段内的私网地址放行（内网部署只放行个别网段的精确方式）。"""
+    monkeypatch.setattr(settings, "SSRF_EXTRA_ALLOW_CIDRS", ["10.0.1.0/24"])
+    assert validate_public_url("http://10.0.1.20:8080/api") == "http://10.0.1.20:8080/api"
+
+
+def test_cidr_allowlist_still_blocks_others(monkeypatch):
+    monkeypatch.setattr(settings, "SSRF_EXTRA_ALLOW_CIDRS", ["10.0.1.0/24"])
+    with pytest.raises(ValueError):
+        validate_public_url("http://10.0.2.20:8080/api")  # 同为私网但不在白名单
+    with pytest.raises(ValueError):
+        validate_public_url("http://169.254.169.254/latest/meta-data")  # 云元数据永拒
+
+
+def test_invalid_cidr_ignored_not_fatal(monkeypatch):
+    monkeypatch.setattr(settings, "SSRF_EXTRA_ALLOW_CIDRS", ["not-a-cidr"])
+    with pytest.raises(ValueError):
+        validate_public_url("http://127.0.0.1/x")  # 无效项被忽略，默认拒绝仍生效

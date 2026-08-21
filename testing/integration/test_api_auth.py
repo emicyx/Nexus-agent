@@ -35,7 +35,8 @@ def test_correct_key_passes_auth(client, api_key_enabled):
 def test_health_exempt_from_auth(client, api_key_enabled):
     resp = client.get("/health")
     assert resp.status_code == 200
-    assert resp.json() == {"status": "ok"}
+    # A7：/health 现在带 checks 字段（DB/Redis 探活结果），仍豁免鉴权
+    assert resp.json()["status"] == "ok"
 
 
 def test_post_chat_stream_requires_key(client, api_key_enabled):

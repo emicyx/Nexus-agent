@@ -359,13 +359,18 @@ export default function ChatPage() {
                   新建对话
                 </button>
               )}
-              <button
-                onClick={retry}
-                disabled={isStreaming}
-                className="text-xs text-red-500 underline transition hover:text-red-700 disabled:opacity-50"
-              >
-                重试
-              </button>
+              {errorKind !== "budget_exceeded" ? (
+                <button
+                  onClick={retry}
+                  disabled={isStreaming}
+                  className="text-xs text-red-500 underline transition hover:text-red-700 disabled:opacity-50"
+                >
+                  重试
+                </button>
+              ) : (
+                // 日预算熔断（budget_exceeded）：今日额度已用完，重试无意义，提示明日再试
+                <span className="text-xs text-red-400">今日额度已用完，请明日再试</span>
+              )}
             </span>
           </div>
         )}

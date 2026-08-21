@@ -97,6 +97,15 @@ export function useChat(crewId?: number | null) {
   const abortRef = useRef<AbortController | null>(null);
   const sessionIdRef = useRef<string>(generateSessionId());
   const lastMessageRef = useRef<string>("");
+  const approvalPollFailuresRef = useRef(0);
+
+  // 组件卸载时中止进行中的 SSE 流：否则 fetch reader 会继续读完整个流
+  // （白耗连接/流量），并且继续 setState 到已卸载组件
+  useEffect(() => {
+    return () => {
+      abortRef.current?.abort();
+    };
+  }, []);
 
   // crew 切换时：从 localStorage 恢复该 crew 的最后 session_uuid，并加载历史消息
   useEffect(() => {
@@ -105,7 +114,6 @@ export function useChat(crewId?: number | null) {
       setSteps([]);
       setApprovals([]);
       setError(null);
-    setErrorKind(null);
       setErrorKind(null);
       setCurrentSessionUuid(null);
       sessionIdRef.current = generateSessionId();
@@ -402,7 +410,6 @@ export function useChat(crewId?: number | null) {
       setSteps([]);
       setApprovals([]);
       setError(null);
-    setErrorKind(null);
       setErrorKind(null);
       try {
         const detail = await getChatSession(sessionId);
@@ -446,16 +453,23 @@ export function useChat(crewId?: number | null) {
     [],
   );
 
-  // 轮询待审批状态：后端 60s 超时会把 Redis 状态置为 TIMEOUT，前端定时拉取
+  // 轮询待审批状态：后端超时会把 Redis 状态置为 TIMEOUT，前端定时拉取
   // 让卡片正确显示"已超时"（也覆盖用户没点按钮、跨端审批等场景）。
+  // 连续失败（如后端重启/审批单过期返回 404）达到上限后停止轮询，
+  // 避免页面开着就每 3s 永久打后端；新的 approval 事件会重置计数。
   useEffect(() => {
     const pending = approvals.filter((a) => a.status === "PENDING");
-    if (pending.length === 0) return;
+    if (pending.length === 0) {
+      approvalPollFailuresRef.current = 0;
+      return;
+    }
 
+    const MAX_POLL_FAILURES = 5;
     const timer = setInterval(async () => {
       for (const a of pending) {
         try {
           const result = await getApproval(a.id);
+          approvalPollFailuresRef.current = 0;
           if (result.status !== "PENDING") {
             setApprovals((prev) =>
               prev.map((p) =>
@@ -470,7 +484,10 @@ export function useChat(crewId?: number | null) {
             );
           }
         } catch {
-          // 审批单不存在/已过期（Redis key 过期）：忽略，等下一轮
+          approvalPollFailuresRef.current += 1;
+          if (approvalPollFailuresRef.current >= MAX_POLL_FAILURES) {
+            clearInterval(timer);
+          }
         }
       }
     }, 3000);

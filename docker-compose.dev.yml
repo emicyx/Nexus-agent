@@ -1,0 +1,22 @@
+# 开发环境覆盖层（P0-2/P0-3 拆分）：生产 compose 不再挂源码/热重载，
+# 本地开发用 `make dev`（= docker compose -f docker-compose.yml -f docker-compose.dev.yml up）。
+# 不要把本文件重命名为 docker-compose.override.yml——那样 git 部署时会被自动合并。
+services:
+  backend:
+    # 热重载 + 源码挂载（容器内以 root 跑，免 bind mount 权限折腾）
+    user: root
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+    volumes:
+      - ./backend:/app
+      - ./backend/data:/app/data
+
+  frontend:
+    # next dev + 源码挂载；直连模式显式指定后端地址（浏览器 → localhost:8000）
+    command: ["npm", "run", "dev"]
+    environment:
+      NEXT_PUBLIC_API_BASE: http://localhost:8000
+      NEXT_PUBLIC_API_KEY: ${APP_API_KEY:-}
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next

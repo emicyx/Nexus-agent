@@ -70,11 +70,37 @@ def test_read_relative_inside_data(_sandbox):
     assert p == f.resolve()
 
 
-def test_read_absolute_inside_data(_sandbox):
+def test_read_absolute_inside_outputs(_sandbox):
     data, _ = _sandbox
-    f = data / "notes.txt"
+    (data / "outputs").mkdir(parents=True, exist_ok=True)
+    f = data / "outputs" / "notes.txt"
     f.write_text("x", encoding="utf-8")
     assert resolve_read_path(str(f)) == f.resolve()
+
+
+def test_read_screenshots_allowed(_sandbox):
+    data, _ = _sandbox
+    shots = data / "screenshots"
+    shots.mkdir(parents=True, exist_ok=True)
+    f = shots / "s.png"
+    f.write_bytes(b"\x89PNG")
+    assert resolve_read_path("screenshots/s.png") == f.resolve()
+
+
+def test_read_data_root_internal_storage_rejected(_sandbox):
+    """读取白名单已收窄：data 根（CrewAI 内部存储所在）不可读。
+
+    此前白名单是整个 SANDBOX_DATA_DIR，latest_kickoff_task_outputs.db /
+    .crewai_user.json 等内部文件可被 agent 读进 prompt——属越权读取面。
+    """
+    data, _ = _sandbox
+    for name in ("latest_kickoff_task_outputs.db", ".crewai_user.json", "notes.txt"):
+        f = data / name
+        f.write_text("x", encoding="utf-8")
+        with pytest.raises(SandboxViolation):
+            resolve_read_path(str(f))
+        with pytest.raises(SandboxViolation):
+            resolve_read_path(name)
 
 
 def test_read_absolute_outside_rejected(tmp_path):

@@ -17,6 +17,14 @@ from app.config import settings
 
 logger = logging.getLogger("redis")
 
+# 网络超时：redis-py 默认 socket_timeout=None（无限等待）。Redis 挂起时
+# HITL 审批轮询 / token 镜像写入所在的 worker 线程会永久阻塞（优雅停机的
+# 强制取消也无法中断线程），必须显式设超时让调用以异常形式返回。
+_REDIS_CONNECT_TIMEOUT = 5  # 建连超时（秒）
+_REDIS_SOCKET_TIMEOUT = 10  # 单次读写超时（秒）
+_REDIS_HEALTH_CHECK_INTERVAL = 30  # 空闲连接周期性 PING，及时发现半死连接
+_REDIS_MAX_CONNECTIONS = 50  # 连接池上限，防连接无界增长
+
 # 异步客户端（API 层）
 _async_client: aioredis.Redis | None = None
 
@@ -29,7 +37,12 @@ def get_async_redis() -> aioredis.Redis:
     global _async_client
     if _async_client is None:
         _async_client = aioredis.from_url(
-            settings.REDIS_URL, decode_responses=True
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=_REDIS_CONNECT_TIMEOUT,
+            socket_timeout=_REDIS_SOCKET_TIMEOUT,
+            health_check_interval=_REDIS_HEALTH_CHECK_INTERVAL,
+            max_connections=_REDIS_MAX_CONNECTIONS,
         )
         logger.info("async redis client created")
     return _async_client
@@ -40,10 +53,40 @@ def get_sync_redis() -> redis.Redis:
     global _sync_client
     if _sync_client is None:
         _sync_client = redis.from_url(
-            settings.REDIS_URL, decode_responses=True
+            settings.REDIS_URL,
+            decode_responses=True,
+            socket_connect_timeout=_REDIS_CONNECT_TIMEOUT,
+            socket_timeout=_REDIS_SOCKET_TIMEOUT,
+            health_check_interval=_REDIS_HEALTH_CHECK_INTERVAL,
+            max_connections=_REDIS_MAX_CONNECTIONS,
         )
         logger.info("sync redis client created")
     return _sync_client
+
+
+# ---------- 优雅停机（B4）：关闭连接池 ----------
+
+
+async def close_async_redis() -> None:
+    global _async_client
+    if _async_client is not None:
+        try:
+            await _async_client.aclose()
+        except Exception:  # noqa: BLE001
+            logger.debug("close async redis failed", exc_info=True)
+        _async_client = None
+        logger.info("async redis client closed")
+
+
+def close_sync_redis() -> None:
+    global _sync_client
+    if _sync_client is not None:
+        try:
+            _sync_client.close()
+        except Exception:  # noqa: BLE001
+            logger.debug("close sync redis failed", exc_info=True)
+        _sync_client = None
+        logger.info("sync redis client closed")
 
 
 # ---------- 审批状态机辅助 ----------

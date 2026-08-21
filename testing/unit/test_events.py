@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from app.core.events import AgentEvent, event_stream, format_sse
+from app.core.events import AgentEvent, dropped_event_count, event_stream, format_sse, try_put
 
 
 def test_format_sse_basic():
@@ -72,3 +72,34 @@ async def test_event_stream_keepalive_ping():
     # 至少产出一个 ping，最后是 done
     assert any(i == ": ping\n\n" for i in items)
     assert items[-1].startswith("event: done\n")
+
+
+# ---------- A3：有界队列安全投递 ----------
+
+
+def test_try_put_puts_when_space():
+    q: asyncio.Queue = asyncio.Queue(maxsize=2)
+    assert try_put(q, AgentEvent(type="token", content="1")) is True
+    assert try_put(q, AgentEvent(type="token", content="2")) is True
+    assert q.qsize() == 2
+
+
+def test_try_put_drops_oldest_when_full():
+    q: asyncio.Queue = asyncio.Queue(maxsize=2)
+    before = dropped_event_count()
+    try_put(q, AgentEvent(type="token", content="1"))
+    try_put(q, AgentEvent(type="token", content="2"))
+    # 满后再投：丢最旧（"1"），新事件入队
+    assert try_put(q, AgentEvent(type="token", content="3")) is True
+    items = [q.get_nowait(), q.get_nowait()]
+    contents = [i.content for i in items]
+    assert contents == ["2", "3"]
+    assert dropped_event_count() == before + 1
+
+
+def test_try_put_sentinel_on_full():
+    """断连兜底场景：哨兵 None 也走丢最旧策略强塞（消费端已不在时防悬挂）。"""
+    q: asyncio.Queue = asyncio.Queue(maxsize=1)
+    try_put(q, AgentEvent(type="token", content="1"))
+    assert try_put(q, None) is True
+    assert q.get_nowait() is None

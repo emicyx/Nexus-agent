@@ -98,7 +98,7 @@ async def search_relevant_memories(
                 await db.commit()
             return memories
     except Exception as e:
-        logger.warning(f"search_relevant_memories failed: {e}")
+        logger.exception("search_relevant_memories failed")
         return []
 
 
@@ -229,6 +229,6 @@ def _run_memory_extraction(
             len(candidates),
         )
     except Exception as e:
-        logger.warning(f"ltm extract failed: {e}")
+        logger.exception("ltm extract failed")
 
 

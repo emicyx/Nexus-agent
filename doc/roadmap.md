@@ -118,3 +118,35 @@ P2-1/P2-2（LLM 合并、factory 拆分）   ← 下一步：下次大改动前�
 ```
 
 每完成一项：勾选状态、在 `进度.md` 记一笔、同步更新本文档与 architecture.md 对应章节。
+
+---
+
+## 上线欠账清单修复（2026-08-21 完成）
+
+按上线前欠账清单逐项落地，A 类 Blocker 全清 + B 类观测运维 + C 类两个快速项：
+
+### A 类（Blocker）
+- **A1 断连终止执行**：新增 `core/run_control.py`——contextvar + `threading.Event` 取消标志（随 `asyncio.to_thread` 复制进 worker 线程），4 个检查点（工具调用前 / HITL 轮询 / 委派子 Agent 前 / 异步执行循环顶部）；`RunCancelledError` 继承 `BaseException` 穿透 CrewAI 的 task retry 与 `except Exception` 兜底。断连后不再白跑 LLM 调用；HITL 待审单自动置 CANCELLED。端到端回归见 `testing/unit/test_cancellation.py`。
+- **A2 Token 计量与日预算熔断**：新增 `core/token_budget.py`——四条 LLM 路径（同步/异步 × 流式/非流式）提取 usage（流式补 `stream_options.include_usage`），内存计数 + Redis 按「天」INCR 镜像（Redis 挂掉降级仅内存）；`LLM_TOKEN_DAILY_BUDGET>0` 时新请求前置检查，超限走错误分类管道新增的 `budget_exceeded` 类，前端隐藏「重试」并提示明日再试。
+- **A3 队列有界**：SSE 队列 `maxsize=200`（`SSE_QUEUE_MAXSIZE`），满时丢最旧事件（`events.try_put`），final_answer/error/哨兵仍走带背压的 `await put`；丢弃计数进 `/metrics`。
+- **A4 API Key 常量时间比较**：`security.py` 改 `secrets.compare_digest`。
+- **A5 SSRF DNS rebinding**：`net_guard.py` 校验通过即把解析出的公网 IP 登记为 pin，自定义连接类锁定 IP 直连（Host 头/SNI/证书校验仍用域名）；`safe_get_with_redirects` 逐跳校验+锁定。Playwright 路径维持跳转前校验（已知残余面，注释标明）。
+- **A6 磁盘清理**：新增 `core/sandbox_cleanup.py`——outputs/screenshots 超保留期（默认 7 天）文件每日清理 + 空目录回收 + 磁盘用量 ≥85% 告警；随 lifespan 调度，也可 `python -m app.core.sandbox_cleanup` 挂系统 cron。
+- **A7 真实健康检查**：`/health` 探 `SELECT 1` + Redis ping，失败 503（成功保留 `status:"ok"`）；compose 给 backend 加 healthcheck。
+- **A8 启动 fail-fast**：`APP_ENV=production`（或 `DB_INIT_STRICT=true`）时建表失败直接终止启动。
+- **A9 数据卫生**：`SEED_DEMO_DATA=false` 关闭测试种子（生产用真实语料经文档上传接口导入）。
+
+### B 类（观测与运维）
+- **request-id**：纯 ASGI 中间件（不用 BaseHTTPMiddleware，避免影响 SSE/断连检测）+ record factory 注入，全链路日志（含 worker 线程）带 `[req:xxx]`，响应头回传 `X-Request-ID`（支持上游透传）。
+- **logger.exception 扫荡**：约 30 处 except 块内吞栈的 `logger.warning` 改为 `logger.exception`（factory/memory_*/embedding 相关重试进度日志与 fetch_url/aliyun_llm 流式降级路径全覆盖）。
+- **/metrics**：新增 `core/metrics.py` 手写 Prometheus 文本格式（零新依赖）——SSE 并发、每会话队列深度、丢事件计数、每工具调用数/失败数/P95、当日与每会话 token 用量、预算上限。端点带 API Key 鉴权。
+- **优雅停机**：`on_event` → lifespan；shutdown = 停止接新会话（chat 返回 503）→ 等在跑 Crew 收尾（`SHUTDOWN_GRACE_SECONDS`，默认 60s，复用 A1 注册表）→ 强制取消 → 关 Redis/DB 连接池。
+
+### C 类（快速项）
+- **上下文窗口查表**（原接近 Blocker）：`get_context_window_size` 从硬编码 8192 改为模型名查表（plus/max→131072，turbo/flash/long→1000000，未知默认 131072，宁高勿低）+ `LLM_CONTEXT_WINDOW_OVERRIDE` 兜底。
+- **temperature 接通**：DB 里 agent 的 `temperature` 此前从未生效（假配置），现 `_get_agent_llm` 读取并按 (model, temperature) 缓存实例。
+
+### 未做（按清单排期）
+- aliyun_llm sync/async transport 收敛（2-3 天，上线稳定后）、SSE Redis Pub/Sub + 断点续跑（多副本前）、RAG rerank/UNION/LTM 去重、Alembic 首次上线打底（部署日动作）、备份 cron/UptimeRobot（部署日动作）。
+
+测试：新增单测（取消端到端 ×3、run_control、token_budget、try_put、net_guard pin、context window、metrics、sandbox cleanup、middleware）+ 集成（预算熔断 SSE、/metrics、health 探活），后端 unit+integration 全绿、前端 tsc+build 通过。

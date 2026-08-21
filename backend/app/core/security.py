@@ -5,6 +5,7 @@
 前端需同步配置 NEXT_PUBLIC_API_KEY（docker-compose 已自动透传）。
 """
 import logging
+import secrets
 
 from fastapi import Header, HTTPException
 
@@ -20,5 +21,8 @@ def require_api_key(
     expected = settings.APP_API_KEY
     if not expected:
         return
-    if not x_api_key or x_api_key != expected:
+    # 常量时间比较：普通 == 可被逐字节计时侧信道爆破，密钥比对必须用 compare_digest
+    if not x_api_key or not secrets.compare_digest(
+        x_api_key.encode("utf-8"), expected.encode("utf-8")
+    ):
         raise HTTPException(status_code=401, detail="无效或缺失的 X-API-Key")

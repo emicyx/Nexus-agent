@@ -13,6 +13,8 @@
 """
 from __future__ import annotations
 
+from app.core.token_budget import TokenBudgetExceededError
+
 # 错误类别（下发到前端 error_kind，前端据此展示引导文案）
 KIND_TOKEN_LIMIT = "token_limit"
 KIND_RATE_LIMIT = "rate_limit"
@@ -20,6 +22,7 @@ KIND_AUTH = "auth"
 KIND_TIMEOUT = "timeout"
 KIND_NETWORK = "network"
 KIND_SERVER = "server"
+KIND_BUDGET_EXCEEDED = "budget_exceeded"
 KIND_UNKNOWN = "unknown"
 
 # 每类错误给用户的行动建议
@@ -30,6 +33,7 @@ _USER_ADVICE = {
     KIND_TIMEOUT: "模型响应超时。可直接「重试」；若持续超时，请缩短问题复杂度或稍后再试。",
     KIND_NETWORK: "无法连接模型服务。请检查本机网络（含代理设置）后重试。",
     KIND_SERVER: "模型服务端暂时不可用。请稍后「重试」。",
+    KIND_BUDGET_EXCEEDED: "今日 Token 预算已用完（A2 日预算熔断）。请明日再试，或联系管理员调大 LLM_TOKEN_DAILY_BUDGET。",
     KIND_UNKNOWN: "执行出错，可「重试」；若持续失败请查看后端日志。",
 }
 
@@ -57,7 +61,10 @@ def classify_llm_error(exc: BaseException) -> tuple[str, str]:
     code = _status_code(exc)
 
     kind = KIND_UNKNOWN
-    if (
+    if isinstance(exc, TokenBudgetExceededError):
+        # A2 日预算熔断：显式类型优先于文本启发式
+        kind = KIND_BUDGET_EXCEEDED
+    elif (
         isinstance(exc, TimeoutError)
         or "timeout" in text or "timed out" in text or "超时" in text
     ):

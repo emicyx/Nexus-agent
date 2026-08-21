@@ -5,11 +5,16 @@ services:
       POSTGRES_USER: nexus
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-nexus}
       POSTGRES_DB: nexus
+      # 应用账号（非 superuser）：init.sh 首次初始化时创建，backend 默认 DSN 使用
+      APP_DB_USER: ${APP_DB_USER:-nexus_app}
+      APP_DB_PASSWORD: ${APP_DB_PASSWORD:-nexus_app}
+    # P0-3：数据面端口仅绑定 loopback——浏览器流量走前端同源代理，
+    # 数据面无需对外；需要宿主机直连调试时本地可用（服务器上公网不可达）
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./infra/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+      - ./infra/postgres/init.sh:/docker-entrypoint-initdb.d/init.sh:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U nexus"]
       interval: 5s
@@ -20,11 +25,12 @@ services:
     image: redis:7-alpine
     # 可选密码：.env 设 REDIS_PASSWORD 后启用 requirepass；留空 = 无密码（现状）
     # （sh 参数展开 ${VAR:+...}：变量非空才追加 --requirepass）
+    # appendonly：token 日预算计数持久化，Redis 重启不清零（否则熔断被重置）
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD:-}
-    command: ["sh", "-c", "exec redis-server ${REDIS_PASSWORD:+--requirepass \"$REDIS_PASSWORD\"}"]
+    command: ["sh", "-c", "exec redis-server --appendonly yes ${REDIS_PASSWORD:+--requirepass \"$REDIS_PASSWORD\"}"]
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s
@@ -35,30 +41,39 @@ services:
     build: ./backend
     env_file: .env
     environment:
-      POSTGRES_DSN: postgresql://nexus:${POSTGRES_PASSWORD:-nexus}@postgres:5432/nexus
+      # 应用账号（非 superuser，init.sh 创建）。旧数据卷没有该角色时：
+      # 按 README「存量数据卷补建应用账号」一节执行 SQL，或临时设 APP_DB_USER=nexus 回退
+      POSTGRES_DSN: postgresql://${APP_DB_USER:-nexus_app}:${APP_DB_PASSWORD:-nexus_app}@postgres:5432/nexus
       # 启用 Redis 密码时需在 .env 里整体覆盖 REDIS_URL（如 redis://:密码@redis:6379/0）
       REDIS_URL: ${REDIS_URL:-redis://redis:6379/0}
+    # P0-3：后端仅 loopback——浏览器走前端同源代理（/v1/[...path]），不再直连 8000
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000"
     volumes:
-      - ./backend:/app
+      # 仅数据目录挂载（代码走镜像不可变交付；源码热挂载见 docker-compose.dev.yml）
       - ./backend/data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
       redis:
         condition: service_healthy
+    # A7：真实健康检查（/health 探 DB+Redis，任一挂掉返回 503 → 容器 unhealthy）
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
 
   frontend:
     build: ./frontend
     environment:
-      NEXT_PUBLIC_API_BASE: http://localhost:8000
-      NEXT_PUBLIC_API_KEY: ${APP_API_KEY:-}
+      # 服务端 env（不打进浏览器 bundle）：代理目标 + 后端密钥注入 + 访问密码门
+      BACKEND_ORIGIN: http://backend:8000
+      APP_API_KEY: ${APP_API_KEY:-}
+      APP_ACCESS_PASSWORD: ${APP_ACCESS_PASSWORD:-}
     ports:
       - "3000:3000"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules
     depends_on:
       - backend
 

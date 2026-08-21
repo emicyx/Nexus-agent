@@ -214,6 +214,6 @@ async def search_kb_high_confidence(
                 break
         return results
     except Exception as e:
-        logger.warning(f"search_kb_high_confidence failed: {e}")
+        logger.exception("search_kb_high_confidence failed")
         return []
 

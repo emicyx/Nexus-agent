@@ -47,9 +47,11 @@ async def create_document(
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
-    except Exception as e:
+    except Exception:
+        # 原始异常只进日志（logger.exception 已带堆栈），不回传客户端
+        # ——500 detail 可能携带内部路径/DSN 片段
         logger.exception("create_document_failed")
-        raise HTTPException(500, f"文档上传失败: {e}")
+        raise HTTPException(500, "文档上传失败，请稍后重试或联系管理员")
 
 
 @router.post("/upload", response_model=DocumentRead, status_code=201)
@@ -83,9 +85,9 @@ async def upload_document_file(
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
-    except Exception as e:
+    except Exception:
         logger.exception("upload_document_failed")
-        raise HTTPException(500, f"文件上传失败: {e}")
+        raise HTTPException(500, "文件上传失败，请稍后重试或联系管理员")
 
 
 @router.delete("/{doc_id}", status_code=204)
