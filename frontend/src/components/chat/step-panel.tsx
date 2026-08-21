@@ -11,6 +11,10 @@ import {
   Loader2,
   Sparkles,
   Crown,
+  GitBranch,
+  ClipboardCheck,
+  BadgeCheck,
+  BadgeX,
 } from "lucide-react";
 
 export function StepPanel({
@@ -28,6 +32,8 @@ export function StepPanel({
   const thinkingCount = steps.filter((s) => s.kind === "thinking" || s.kind === "thinking_streaming").length;
   const toolCalls = steps.filter((s) => s.kind === "tool_call");
   const toolDone = toolCalls.filter((s) => !s.pending).length;
+  const delegationCount = steps.filter((s) => s.kind === "delegation").length;
+  const taskDoneCount = steps.filter((s) => s.kind === "task_completed").length;
 
   // 流式过程中自动滚到底部（仅当用户已在底部时）
   useEffect(() => {
@@ -49,6 +55,8 @@ export function StepPanel({
         {steps.length > 0 && (
           <span className="text-xs text-sakura-400">
             · 思考 {thinkingCount} · 工具 {toolDone}/{toolCalls.length}
+            {delegationCount > 0 && ` · 委派 ${delegationCount}`}
+            {taskDoneCount > 0 && ` · 任务 ${taskDoneCount}`}
           </span>
         )}
         {isStreaming && (
@@ -159,6 +167,57 @@ function StepCard({ step, isLatest }: { step: CollabStep; isLatest?: boolean }) 
         {step.output && (
           <div className="mt-0.5 text-[11px] text-zinc-400 line-clamp-3">
             {step.output}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (step.kind === "delegation") {
+    // manager 委派：谁 → 谁做什么
+    return (
+      <div className={`rounded-lg border-l-[3px] border-sakura-500 bg-sakura-100/80 pl-3 pr-2 py-1.5${breathClass}`}>
+        <div className="flex items-center gap-1.5">
+          <GitBranch size={12} className="text-sakura-600" />
+          <span className="text-xs font-semibold text-sakura-700">{style.label}</span>
+          <span className="text-xs text-zinc-400">委派给</span>
+          <span className="text-xs font-medium text-sakura-600">{step.coworker || "子 Agent"}</span>
+        </div>
+        {step.content && (
+          <div className="mt-0.5 text-[11px] text-sakura-600 line-clamp-3">
+            {step.content}
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (step.kind === "task_completed") {
+    // 任务级产出：任务名 + 输出格式 + pydantic 校验徽标 + 预览
+    return (
+      <div className={`rounded-lg border-l-2 ${style.border} bg-sakura-50/60 pl-3 pr-2 py-1.5${breathClass}`}>
+        <div className="flex items-center gap-1.5">
+          <ClipboardCheck size={12} className="text-emerald-500" />
+          <span className="text-xs font-medium">{style.label}</span>
+          <span className="text-xs text-zinc-400">完成</span>
+          <span className="truncate text-xs font-medium text-sakura-600">
+            {step.taskName || "任务"}
+          </span>
+          {step.pydanticValid === true && (
+            <BadgeCheck size={12} className="shrink-0 text-emerald-500" aria-label="结构化校验通过" />
+          )}
+          {step.pydanticValid === false && (
+            <BadgeX size={12} className="shrink-0 text-red-400" aria-label="结构化校验未通过" />
+          )}
+          {step.outputFormat && (
+            <span className="ml-auto shrink-0 rounded bg-sakura-100 px-1.5 py-0.5 text-[10px] text-sakura-500">
+              {step.outputFormat}
+            </span>
+          )}
+        </div>
+        {step.rawPreview && (
+          <div className="mt-0.5 text-[11px] text-zinc-400 line-clamp-3">
+            {step.rawPreview}
           </div>
         )}
       </div>

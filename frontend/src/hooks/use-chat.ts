@@ -48,10 +48,16 @@ export interface Message {
   content: string;
 }
 
-/** 协作步骤：可以是 Agent 思考、流式思考 token、工具调用或工具结果 */
+/** 协作步骤：Agent 思考、流式思考、工具调用/结果、委派、任务完成 */
 export interface CollabStep {
   id: number;
-  kind: "thinking" | "thinking_streaming" | "tool_call" | "tool_result";
+  kind:
+    | "thinking"
+    | "thinking_streaming"
+    | "tool_call"
+    | "tool_result"
+    | "delegation"
+    | "task_completed";
   agent?: string;
   content: string;
   tool?: string;
@@ -59,6 +65,13 @@ export interface CollabStep {
   output?: string;
   step?: number;
   pending?: boolean;
+  /** delegation：被委派的子 agent 角色 */
+  coworker?: string;
+  /** task_completed：任务名 / 输出格式 / pydantic 校验 / 产出预览 */
+  taskName?: string;
+  outputFormat?: string;
+  pydanticValid?: boolean;
+  rawPreview?: string;
 }
 
 export interface Approval {
@@ -258,6 +271,27 @@ export function useChat(crewId?: number | null) {
             });
             break;
           }
+          case "delegation":
+            // manager 委派：显示"谁 → 谁做什么"
+            pushStep({
+              kind: "delegation",
+              agent: evt.agent,
+              coworker: evt.input?.coworker,
+              content: evt.input?.task || evt.content,
+            });
+            break;
+          case "task_completed":
+            // 任务级产出：任务名 + 输出格式 + pydantic 校验 + 产出预览
+            pushStep({
+              kind: "task_completed",
+              agent: evt.output?.agent || evt.agent,
+              taskName: evt.output?.task_name,
+              outputFormat: evt.output?.output_format,
+              pydanticValid: evt.output?.pydantic_valid,
+              rawPreview: evt.output?.raw_preview || evt.content,
+              content: evt.content,
+            });
+            break;
           case "token":
             assistantText += evt.content;
             setMessages((prev) => {
@@ -431,22 +465,12 @@ export function useChat(crewId?: number | null) {
 }
 
 /**
- * 通过 session_uuid 加载历史消息。
- * 注意：API 是 GET /v1/chat/sessions/{id}（int），但前端只有 uuid。
- * 解决：先调用 listSessions 过滤匹配的 uuid 拿 id。
- * 简化：调用 /v1/chat/sessions?crew_id=X 拿到列表，找到匹配 uuid。
+ * 通过 session_uuid 加载历史消息（直连 GET /v1/chat/sessions/uuid/{uuid}，
+ * 替代此前"拉全量列表线性 find"的 O(N) 绕路）。
  */
 async function getChatSessionByIdUuid(uuid: string): Promise<Message[]> {
-  // 复用 listChatSessions，但这里我们不知道 crewId，扫全部。
-  // 为简化：调用 /v1/chat/sessions 不带 crew_id 过滤。
-  const { listChatSessions } = await import("@/lib/api-client");
-  const sessions = await listChatSessions();
-  const found = sessions.find((s) => s.session_uuid === uuid);
-  if (!found) {
-    throw new Error("session not found");
-  }
-  const { getChatSession } = await import("@/lib/api-client");
-  const detail = await getChatSession(found.id);
+  const { getChatSessionByUuid } = await import("@/lib/api-client");
+  const detail = await getChatSessionByUuid(uuid);
   return detail.messages.map((m) => ({
     role: m.role as "user" | "assistant",
     content: m.content,
