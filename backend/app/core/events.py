@@ -12,7 +12,9 @@ SSE 事件协议：
     approval_requested  - HITL 审批请求（agent, tool, input含approval_id/action/risk_level）
     token               - 最终回答分块
     final_answer        - 最终完整回答
-    error               - 错误
+    task_completed      - 任务级产出（agent, output含task_name/output_format/pydantic_valid/raw_preview）
+    delegation          - manager 委派（agent, input含task/context/coworker）
+    error               - 错误（content=用户友好提示, error_kind=分类见 core/llm_errors.py）
     done                - 流结束哨兵
 """
 import asyncio
@@ -32,6 +34,7 @@ class AgentEvent:
     tool: str | None = None        # 工具名（tool_call / tool_result 事件）
     input: Any | None = None       # 工具输入（tool_call 事件）
     output: Any | None = None      # 工具输出（tool_result 事件）
+    error_kind: str | None = None  # error 事件分类（token_limit/rate_limit/auth/timeout/network/server/unknown）
     ts: float = field(default_factory=time.time)
 
 

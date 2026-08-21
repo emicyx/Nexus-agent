@@ -901,8 +901,134 @@ async def ensure_seed() -> None:
             context_task_ids=[write_markdown_task.id],
         )
 
+        # ── Loop Agent：迭代写作-评审循环 crew（require.txt todo 6）──────
+        # 模式：委派写作 → 委派结构化评审（ReviewVerdict schema，REVISE 则退改）
+        # → 循环直至 PASS 或达轮次上限。与 delegation/task_completed 事件联动，
+        # 前端步骤流可看到每一轮"委派 → 任务完成（pydantic 校验徽标）"。
+        review_verdict_schema = await _get_or_create_schema(
+            session,
+            name="ReviewVerdict",
+            description="结构化评审结论：PASS 放行 / REVISE 退改（附问题与建议）",
+            schema_fields=[
+                {"name": "verdict", "type": "str", "required": True, "description": "评审结论，只能是 PASS 或 REVISE"},
+                {"name": "issues", "type": "list[str]", "required": True, "description": "发现的问题列表（无问题则空列表）"},
+                {"name": "suggestions", "type": "list[str]", "required": False, "description": "具体修改建议"},
+                {"name": "round", "type": "int", "required": False, "description": "当前评审轮次（从 1 开始）"},
+            ],
+        )
+        iterative_loop_skill = await _get_or_create_skill(
+            session,
+            name="迭代评审循环",
+            description="循环编排主管 SOP：写作→评审→退改→重评，直至 PASS 或达上限",
+            prompt_template=(
+                "你遵循严格的迭代评审循环 SOP：\n"
+                "1. 委派「初稿撰写员」按用户要求写稿（保存到 outputs/loop/ 目录），拿到文件路径\n"
+                "2. 委派「严格评审员」读该文件，输出结构化评审（verdict=PASS/REVISE + issues + suggestions）\n"
+                "3. verdict=REVISE → 把 issues+suggestions 原样转给撰写员退改，然后回到第 2 步重评\n"
+                "4. verdict=PASS 或已满 3 轮 → 停止循环，向用户汇总：最终稿路径 + 各轮评审要点\n"
+                "铁律：你自己不写稿不评审，只做委派与路由；每轮评审结论必须保留（用户要看过程）；"
+                "第 3 轮仍未 PASS 时接受现状并如实说明遗留问题，不得继续循环。"
+            ),
+            skill_key="iterative_review_loop",
+        )
+        loop_manager = await _get_or_create_agent(
+            session,
+            name="loop_manager",
+            role="循环编排主管",
+            goal=(
+                "通过迭代评审循环产出高质量文稿：委派撰写→委派结构化评审→"
+                "按 REVISE 意见退改重评，直至 PASS 或 3 轮上限，绝不自己动手写稿或评审"
+            ),
+            backstory=(
+                "你是迭代评审循环的编排者，没有任何工具，唯一动作是 delegate_work_to_coworker。\n"
+                "你的团队：初稿撰写员（write_markdown 写稿）、严格评审员（view_file 读稿并按 "
+                "ReviewVerdict 结构输出结论）。\n"
+                "评审员的 verdict=REVISE 时，你必须把 issues 与 suggestions 完整转给撰写员，"
+                "不得自行省略或改写；连续 PASS 或满 3 轮必须终止循环。"
+            ),
+            tools=[],
+            skills=[iterative_loop_skill],
+            max_iter=20,
+            memory=False,
+        )
+        draft_writer = await _get_or_create_agent(
+            session,
+            name="draft_writer",
+            role="初稿撰写员",
+            goal="按要求撰写文稿并保存为 markdown 文件（outputs/loop/ 目录），退改时按评审意见修订",
+            backstory=(
+                "你是撰写员，用 write_markdown 工具把稿件写入 outputs/loop/ 目录"
+                "（文件名含轮次，如 draft_r1.md / draft_r2.md）。\n"
+                "收到评审意见时逐条修改并另存新轮次文件，不覆盖旧稿（保留修订轨迹）。"
+            ),
+            tools=[markdown_writer_tool],
+            max_iter=8,
+            memory=False,
+        )
+        strict_reviewer = await _get_or_create_agent(
+            session,
+            name="strict_reviewer",
+            role="严格评审员",
+            goal="读取指定文件，按 ReviewVerdict 结构输出 PASS/REVISE 评审结论，标准客观、问题可执行",
+            backstory=(
+                "你是评审员，用 view_file 读取稿件路径后评审：完整性、准确性、结构、可读性。\n"
+                "必须输出 verdict=PASS 或 REVISE；REVISE 时 issues 逐条可执行，"
+                "杜绝空泛意见（如「写得更好些」）；没有实质性问题时才给 PASS。"
+            ),
+            tools=[view_file_tool],
+            max_iter=8,
+            memory=False,
+        )
+        iterative_write_crew = await _get_or_create_crew(
+            session,
+            name="iterative_write_crew",
+            description="Loop Agent：初稿→结构化评审→退改循环，直至 PASS 或 3 轮上限（hierarchical）",
+            agents=[draft_writer, strict_reviewer],
+            process_type="hierarchical",
+            manager_agent=loop_manager,
+        )
+        loop_write_task = await _get_or_create_task(
+            session,
+            crew=iterative_write_crew,
+            name="write_draft",
+            description=(
+                "委派「初稿撰写员」完成用户的写作需求：{user_input}\n"
+                "要求保存到 outputs/loop/draft_r1.md，并在委派返回后记录文件路径。"
+            ),
+            expected_output="初稿文件路径与内容概要（由撰写员返回）",
+            position=0,
+        )
+        loop_review_task = await _get_or_create_task(
+            session,
+            crew=iterative_write_crew,
+            name="review_draft",
+            description=(
+                "委派「严格评审员」用 view_file 读取最新一轮稿件，"
+                "按 ReviewVerdict 结构（verdict/issues/suggestions/round）输出评审结论。\n"
+                "REVISE → 按 SOP 把意见转给撰写员退改（新文件 draft_r{N+1}.md）后再次委派评审；\n"
+                "PASS 或满 3 轮 → 进入下一任务。context 只传文件路径，不贴正文。"
+            ),
+            expected_output="ReviewVerdict 结构化评审结论；REVISE 时附修订后最新文件路径",
+            position=1,
+            context_task_ids=[loop_write_task.id],
+            output_schema_id=review_verdict_schema.id,
+        )
+        await _get_or_create_task(
+            session,
+            crew=iterative_write_crew,
+            name="finalize_report",
+            description=(
+                "循环结束后向用户汇总：最终稿文件路径、评审轮次、每轮要点、遗留问题（如有）。\n"
+                "若满 3 轮未 PASS，如实说明遗留问题，不得谎称已通过。"
+            ),
+            expected_output="面向用户的最终交付汇总（含文件路径与评审轨迹）",
+            position=2,
+            context_task_ids=[loop_review_task.id],
+        )
+
         await session.commit()
     logger.info(
         "seed: default crews ensured "
-        "(researcher_writer + knowledge_qa + safety_check + team_orchestrator + web_ingest_crew)"
+        "(researcher_writer + knowledge_qa + safety_check + team_orchestrator + web_ingest_crew "
+        "+ iterative_write_crew)"
     )

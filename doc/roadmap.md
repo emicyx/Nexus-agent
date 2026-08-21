@@ -98,13 +98,13 @@
 - **目标**：多阶段构建：frontend `next build` + standalone；backend 去掉 `--reload`，dev/prod profile 分离。
 
 ### P2-5 产品待办（源自 require.txt）
-- **执行速度**（todo 1，部分完成）：已做 tool 懒加载、async patch、评估模型降级 qwen-turbo；剩余排查点：sequential 多任务串行 LLM 调用是否可并行、STM/KB 预注入的 embedding 串行等待。
-- **loop-agent**（todo 6）：新 建 loop 型 crew（manager 反复审阅直至达标），复用 delegation 追踪可视化循环轮次。
-- **熔断补全**：LLM 幻觉降级（输出 JSON Schema 校验失败重试/标注）与 Token 超限的明确报错文案，目前仅 API 超时有重试。
+- **执行速度**（todo 1，部分完成）：已做 tool 懒加载、async patch、评估模型降级 qwen-turbo；✅ LTM/KB 两路检索已并发（asyncio.gather，此前串行 await 两次 DB 查询；query_vec 本就共享一次 embedding）；剩余：sequential 多任务串行 LLM 调用是否可并行。
+- **loop-agent**（todo 6）：✅ 已完成（2026-08-21）——种子 `iterative_write_crew`（hierarchical）：初稿撰写员（write_markdown）+ 严格评审员（view_file，按 `ReviewVerdict` 结构化 schema 输出 PASS/REVISE），循环编排主管按 3 轮上限路由退改；与 delegation/task_completed 事件联动，前端步骤流可见每轮委派与 pydantic 校验徽标。
+- **熔断补全**：✅ 报错提示方案已完成（2026-08-21）——`core/llm_errors.py` 分类（token_limit/rate_limit/auth/timeout/network/server/unknown）+ SSE error 事件带 `error_kind` + 前端按类引导（token_limit 显示「新建对话」而非「重试」）；API 超时重试原有。幻觉的主动检测（如 schema 校验失败自动重试）仍未做，当前依赖 ReviewVerdict 类结构化评审兜底。
 - **crew 生态**（todo 4）：继续沉淀种子 crew（数据分析、代码生成等），配套 output_schema。
 
 ### P2-6 仓库卫生
-- 删除根目录与 `doc/agent-development-analysis.md` 重复的分析稿及无关个人文档；`.agents/`、`.claude/` 个人 skills 是否入库二选一（建议本地保留、git 忽略）。
+- ~~删除根目录与 `doc/agent-development-analysis.md` 重复的分析稿及无关个人文档~~ ✅ 已完成（2026-08-21，含 backend 内爬取笔记、过期 txt、死代码清理）；`.agents/`、`.claude/` 个人 skills 是否入库二选一（建议本地保留、git 忽略）。
 
 ---
 

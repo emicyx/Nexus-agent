@@ -981,42 +981,52 @@ async def run_crew_chat(
             len(history), len(summary_text), len(history_context),
         )
 
-    # Layer 2 LTM：语义检索用户偏好/经验
-    if session_id and query_vec and settings.LTM_USER_MEMORY_ENABLED:
+    # Layer 2 LTM + Layer 3 KB：两路检索相互独立，并发执行省一次串行等待
+    async def _retrieve_ltm() -> str:
+        if not (session_id and query_vec and settings.LTM_USER_MEMORY_ENABLED):
+            return ""
         try:
             from app.services.memory_ltm import search_relevant_memories, build_ltm_prefix
             t_ltm0 = time.perf_counter()
             memories = await search_relevant_memories(crew_id, query_vec, top_k=3)
-            ltm_prefix = build_ltm_prefix(memories)
+            prefix = build_ltm_prefix(memories)
             logger.info(
                 "timing: ltm_retrieve %.3fs (memories=%d, chars=%d)",
-                time.perf_counter() - t_ltm0, len(memories), len(ltm_prefix),
+                time.perf_counter() - t_ltm0, len(memories), len(prefix),
             )
+            return prefix
         except Exception as e:
             logger.warning(f"ltm_retrieve failed: {e}")
+            return ""
 
-    # Layer 3 KB：高置信知识库片段预注入
-    if query_vec and settings.KB_PREINJECT_ENABLED:
+    async def _retrieve_kb() -> str:
+        if not (query_vec and settings.KB_PREINJECT_ENABLED):
+            return ""
         try:
             from app.services.document_service import search_kb_high_confidence
             t_kb0 = time.perf_counter()
-            kb_hits = await search_kb_high_confidence(
+            hits = await search_kb_high_confidence(
                 query_vec,
                 top_k=settings.KB_PREINJECT_TOP_K,
                 score_threshold=settings.KB_PREINJECT_THRESHOLD,
             )
-            if kb_hits:
+            prefix = ""
+            if hits:
                 lines = ["以下是相关知识库片段，可作为参考：\n"]
-                for i, h in enumerate(kb_hits, 1):
+                for i, h in enumerate(hits, 1):
                     lines.append(f"[{i}] 来源={h['document_name']}（相似度={h['score']:.2f}）\n{h['content']}")
                 lines.append("\n--- 以上为知识库参考 ---\n")
-                kb_prefix = "\n".join(lines)
+                prefix = "\n".join(lines)
             logger.info(
                 "timing: kb_preinject %.3fs (hits=%d, chars=%d)",
-                time.perf_counter() - t_kb0, len(kb_hits), len(kb_prefix),
+                time.perf_counter() - t_kb0, len(hits), len(prefix),
             )
+            return prefix
         except Exception as e:
             logger.warning(f"kb_preinject failed: {e}")
+            return ""
+
+    ltm_prefix, kb_prefix = await asyncio.gather(_retrieve_ltm(), _retrieve_kb())
 
     # 组装 effective_input：LTM + KB + STM + 原始问题
     parts = []

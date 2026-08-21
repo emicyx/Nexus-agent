@@ -25,8 +25,8 @@ export default function ChatPage() {
     approvals,
     isStreaming,
     error,
+    errorKind,
     currentSessionUuid,
-    latestThinking,
     send,
     stop,
     retry,
@@ -346,14 +346,26 @@ export default function ChatPage() {
         {/* 错误提示 */}
         {error && (
           <div className="flex items-center justify-between border-t border-red-200 bg-red-50 px-4 py-2">
-            <span className="text-sm text-red-600">⚠ {error}</span>
-            <button
-              onClick={retry}
-              disabled={isStreaming}
-              className="text-xs text-red-500 underline transition hover:text-red-700 disabled:opacity-50"
-            >
-              重试
-            </button>
+            <span className="mr-3 text-sm text-red-600">⚠ {error}</span>
+            <span className="flex shrink-0 items-center gap-3">
+              {errorKind === "token_limit" && (
+                // 上下文超限时重试无意义，引导新建对话清空上下文
+                <button
+                  onClick={newChat}
+                  disabled={isStreaming}
+                  className="text-xs text-red-600 underline transition hover:text-red-800 disabled:opacity-50"
+                >
+                  新建对话
+                </button>
+              )}
+              <button
+                onClick={retry}
+                disabled={isStreaming}
+                className="text-xs text-red-500 underline transition hover:text-red-700 disabled:opacity-50"
+              >
+                重试
+              </button>
+            </span>
           </div>
         )}
 

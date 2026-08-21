@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.events import AgentEvent, event_stream
+from app.core.llm_errors import classify_llm_error
 from app.crews.factory import get_default_crew_id, run_crew_chat, run_single_agent_chat
 from app.db.session import AsyncSessionLocal, get_db
 from app.schemas.chat import ChatSessionCreate
@@ -78,7 +79,11 @@ async def chat_stream(req: ChatRequest, request: Request):
                 await run_crew_chat(crew_id, req.message, queue, loop, session_id=req.session_id)
         except Exception as e:
             logger.exception("crew_execution_failed")
-            await queue.put(AgentEvent(type="error", content=str(e)))
+            # 熔断报错提示方案：分类 + 用户友好文案（见 core/llm_errors.py）
+            kind, user_message = classify_llm_error(e)
+            await queue.put(
+                AgentEvent(type="error", content=user_message, error_kind=kind)
+            )
         finally:
             await queue.put(None)  # 哨兵，通知 event_stream 结束
 

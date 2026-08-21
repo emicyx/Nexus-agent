@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useRef, useEffect, useMemo } from "react";
+import { useState, useCallback, useRef, useEffect } from "react";
 import {
   streamChat,
   submitApproval,
@@ -90,6 +90,7 @@ export function useChat(crewId?: number | null) {
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [isStreaming, setIsStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [errorKind, setErrorKind] = useState<string | null>(null);
   const [currentSessionUuid, setCurrentSessionUuid] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sessionIdRef = useRef<string>(generateSessionId());
@@ -102,6 +103,8 @@ export function useChat(crewId?: number | null) {
       setSteps([]);
       setApprovals([]);
       setError(null);
+    setErrorKind(null);
+      setErrorKind(null);
       setCurrentSessionUuid(null);
       sessionIdRef.current = generateSessionId();
       return;
@@ -130,12 +133,14 @@ export function useChat(crewId?: number | null) {
     setSteps([]);
     setApprovals([]);
     setError(null);
+    setErrorKind(null);
   }, [crewId]);
 
   const send = useCallback(async (text: string) => {
     if (!text.trim() || isStreaming) return;
 
     setError(null);
+    setErrorKind(null);
     setSteps([]);
     setApprovals([]);
     setMessages((prev) => [
@@ -309,7 +314,10 @@ export function useChat(crewId?: number | null) {
             });
             break;
           case "error":
+            // content 已是后端分类后的友好文案（core/llm_errors.py）；
+            // error_kind 用于前端决定引导动作（token_limit → 建议新建对话而非重试）
             setError(evt.content);
+            setErrorKind(evt.error_kind ?? null);
             break;
           case "done":
             break;
@@ -345,18 +353,13 @@ export function useChat(crewId?: number | null) {
     setTimeout(() => send(lastMessageRef.current), 50);
   }, [isStreaming, send]);
 
-  /** 最新的思考步骤（流式或完整，供 MessageList 实时展示）。 */
-  const latestThinking = useMemo(
-    () => steps.filter((s) => s.kind === "thinking" || s.kind === "thinking_streaming").pop() ?? null,
-    [steps],
-  );
-
   /** 新建对话：生成新 uuid，清空当前 messages（DB 不动）。 */
   const newChat = useCallback(() => {
     setMessages([]);
     setSteps([]);
     setApprovals([]);
     setError(null);
+    setErrorKind(null);
     sessionIdRef.current = generateSessionId();
     setCurrentSessionUuid(null);
     // 注意：不清除 localStorage，等用户真正发消息后再覆盖
@@ -373,6 +376,8 @@ export function useChat(crewId?: number | null) {
       setSteps([]);
       setApprovals([]);
       setError(null);
+    setErrorKind(null);
+      setErrorKind(null);
       try {
         const detail = await getChatSession(sessionId);
         setMessages(
@@ -453,8 +458,8 @@ export function useChat(crewId?: number | null) {
     approvals,
     isStreaming,
     error,
+    errorKind,
     currentSessionUuid,
-    latestThinking,
     send,
     stop,
     retry,

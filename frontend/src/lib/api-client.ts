@@ -20,7 +20,7 @@ export type ChatEvent =
   | { type: "final_answer"; content: string }
   | { type: "task_completed"; content: string; agent: string; output?: { task_name: string; agent: string; output_format: string; pydantic_valid: boolean; raw_preview: string } }
   | { type: "delegation"; content: string; agent: string; input?: { task: string; context: string; coworker: string } }
-  | { type: "error"; content: string }
+  | { type: "error"; content: string; error_kind?: string }
   | { type: "done" };
 
 const API_BASE =
@@ -205,15 +205,12 @@ async function jsonRequest<T>(url: string, opts: RequestInit = {}): Promise<T> {
 
 // ---- Agent ----
 export const listAgents = () => jsonRequest<AgentRead[]>(`${API_BASE}/v1/agents`);
-export const getAgent = (id: number) => jsonRequest<AgentRead>(`${API_BASE}/v1/agents/${id}`);
 export const createAgent = (payload: AgentCreate) =>
   jsonRequest<AgentRead>(`${API_BASE}/v1/agents`, { method: "POST", body: JSON.stringify(payload) });
 export const updateAgent = (id: number, payload: Partial<AgentCreate>) =>
   jsonRequest<AgentRead>(`${API_BASE}/v1/agents/${id}`, { method: "PUT", body: JSON.stringify(payload) });
 export const deleteAgent = (id: number) =>
   jsonRequest<void>(`${API_BASE}/v1/agents/${id}`, { method: "DELETE" });
-export const setAgentTools = (id: number, toolIds: number[]) =>
-  jsonRequest<AgentRead>(`${API_BASE}/v1/agents/${id}/tools`, { method: "POST", body: JSON.stringify(toolIds) });
 
 // ---- Tool ----
 export const listTools = () => jsonRequest<ToolRead[]>(`${API_BASE}/v1/tools`);
@@ -232,12 +229,9 @@ export const updateSkill = (id: number, payload: Partial<SkillCreate>) =>
   jsonRequest<SkillRead>(`${API_BASE}/v1/skills/${id}`, { method: "PUT", body: JSON.stringify(payload) });
 export const deleteSkill = (id: number) =>
   jsonRequest<void>(`${API_BASE}/v1/skills/${id}`, { method: "DELETE" });
-export const setAgentSkills = (id: number, skillIds: number[]) =>
-  jsonRequest<AgentRead>(`${API_BASE}/v1/agents/${id}/skills`, { method: "POST", body: JSON.stringify(skillIds) });
 
 // ---- Crew ----
 export const listCrews = () => jsonRequest<CrewRead[]>(`${API_BASE}/v1/crews`);
-export const getCrew = (id: number) => jsonRequest<CrewRead>(`${API_BASE}/v1/crews/${id}`);
 export const createCrew = (payload: CrewCreate) =>
   jsonRequest<CrewRead>(`${API_BASE}/v1/crews`, { method: "POST", body: JSON.stringify(payload) });
 export const updateCrew = (id: number, payload: Partial<CrewCreate>) =>
@@ -380,22 +374,6 @@ export const getChatSession = (id: number) =>
 
 export const getChatSessionByUuid = (uuid: string) =>
   jsonRequest<ChatSessionDetail>(`${API_BASE}/v1/chat/sessions/uuid/${uuid}`);
-
-export const createChatSession = (payload: {
-  crew_id: number;
-  session_uuid: string;
-  title?: string;
-}) =>
-  jsonRequest<ChatSessionRead>(`${API_BASE}/v1/chat/sessions`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-
-export const updateChatSession = (id: number, payload: { title: string }) =>
-  jsonRequest<ChatSessionRead>(`${API_BASE}/v1/chat/sessions/${id}`, {
-    method: "PATCH",
-    body: JSON.stringify(payload),
-  });
 
 export const deleteChatSession = (id: number) =>
   jsonRequest<void>(`${API_BASE}/v1/chat/sessions/${id}`, { method: "DELETE" });
