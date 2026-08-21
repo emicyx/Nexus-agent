@@ -14,8 +14,6 @@ class Settings(BaseSettings):
     LLM_TIMEOUT: int = 600
 
     # 服务配置
-    BACKEND_HOST: str = "0.0.0.0"
-    BACKEND_PORT: int = 8000
     CORS_ORIGINS: list[str] = ["http://localhost:3000"]
 
     # API 鉴权（P0-2）：X-API-Key 静态密钥。留空 = 不鉴权（本地开发兼容，启动时告警）。
@@ -68,8 +66,6 @@ class Settings(BaseSettings):
     CREWAI_NATIVE_MEMORY_ENABLED: bool = False
 
     # 三层记忆系统开关
-    # Layer 1 STM（会话内压缩）：默认开
-    STM_ENABLED: bool = True
     # Layer 1 STM 滚动摘要：滑出窗口的旧消息增量压缩为滚动摘要（后台 qwen-turbo，fire-and-forget）。
     # 关闭方法：设 STM_SUMMARY_ENABLED=false（回到纯滑动窗口，早期上下文直接丢弃）
     STM_SUMMARY_ENABLED: bool = True

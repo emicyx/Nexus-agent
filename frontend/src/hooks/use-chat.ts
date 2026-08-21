@@ -71,6 +71,8 @@ export interface CollabStep {
   taskName?: string;
   outputFormat?: string;
   pydanticValid?: boolean;
+  /** 该任务是否配置了 output_schema：false/undefined 时不显示校验徽标 */
+  hasSchema?: boolean;
   rawPreview?: string;
 }
 
@@ -154,15 +156,17 @@ export function useChat(crewId?: number | null) {
     abortRef.current = controller;
     setIsStreaming(true);
 
+    // collab 声明在 try 外：finally 扫尾也要访问（流结束/中断时清理孤儿卡）
+    const collab: CollabStep[] = [];
+    let stepId = 0;
+
+    const pushStep = (s: Omit<CollabStep, "id">) => {
+      collab.push({ ...s, id: ++stepId });
+      setSteps([...collab]);
+    };
+
     try {
       let assistantText = "";
-      const collab: CollabStep[] = [];
-      let stepId = 0;
-
-      const pushStep = (s: Omit<CollabStep, "id">) => {
-        collab.push({ ...s, id: ++stepId });
-        setSteps([...collab]);
-      };
 
       for await (const evt of streamChat(text, controller.signal, {
         crewId: crewId ?? undefined,
@@ -179,6 +183,16 @@ export function useChat(crewId?: number | null) {
               ) {
                 collab[i].kind = "thinking";
                 break;
+              }
+            }
+            // 回退：step 计数在 hierarchical 委派场景可能错位（如 manager 无
+            // step_callback、子 agent 思考被误归属），同 agent 的流式卡一并收尾
+            for (let i = collab.length - 1; i >= 0; i--) {
+              if (
+                collab[i].kind === "thinking_streaming" &&
+                collab[i].agent === evt.agent
+              ) {
+                collab[i].kind = "thinking";
               }
             }
             // 整块 thinking 作为最终版本入库
@@ -293,6 +307,7 @@ export function useChat(crewId?: number | null) {
               taskName: evt.output?.task_name,
               outputFormat: evt.output?.output_format,
               pydanticValid: evt.output?.pydantic_valid,
+              hasSchema: evt.output?.has_output_schema,
               rawPreview: evt.output?.raw_preview || evt.content,
               content: evt.content,
             });
@@ -333,6 +348,17 @@ export function useChat(crewId?: number | null) {
         setError(err.message);
       }
     } finally {
+      // 流结束/中断扫尾：hierarchical 下 manager 无 step_callback、思考归属
+      // 错位等都会让流式卡收不到配对的 agent_thinking，不扫尾会永远显示"思考中"
+      for (const s of collab) {
+        if (s.kind === "thinking_streaming") {
+          s.kind = "thinking";
+          s.pending = false;
+        } else if (s.pending) {
+          s.pending = false;
+        }
+      }
+      setSteps([...collab]);
       setIsStreaming(false);
       abortRef.current = null;
     }

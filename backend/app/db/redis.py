@@ -56,15 +56,6 @@ def approval_key(approval_id: str) -> str:
     return f"{APPROVAL_KEY_PREFIX}{approval_id}"
 
 
-async def set_approval_pending(
-    approval_id: str,
-    data: dict[str, Any],
-) -> None:
-    """写入 PENDING 状态（异步，API 层或测试用）。"""
-    r = get_async_redis()
-    await r.set(approval_key(approval_id), json.dumps(data), ex=APPROVAL_TTL)
-
-
 def set_approval_pending_sync(
     approval_id: str,
     data: dict[str, Any],

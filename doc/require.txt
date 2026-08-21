@@ -36,7 +36,7 @@ Tool 异步规范：团队达成共识，所有自定义 Tool 必须遵循异步
 todo:（2026-08-21 状态刷新，详细方案见 doc/roadmap.md）
 1.优化agent执行速度，目前执行速度慢，原因待排查（部分完成：工具懒加载、事件循环 offload patch、评估模型降级 qwen-turbo；剩余见 roadmap P2-5）
 2.用户对话持久化（已完成：chat_sessions/chat_messages 落 PG，前端会话列表）
-3.验证HITL功能（已修复：PENDING→APPROVED/REJECTED/TIMEOUT 状态机 + 审批卡吸顶/轮询，e2e 证据 testing/e2e/evidence_after/smoke_hitl.json）
+3.验证HITL功能（已修复：PENDING→APPROVED/REJECTED/TIMEOUT 状态机 + 审批卡吸顶/轮询，e2e 证据 testing/e2e/evidence/smoke_hitl.json）
 4.继续构建crew生态（进行中：已有 researcher_writer/knowledge_qa/safety_check/safety_review/team_orchestrator/web_ingest_crew 六个种子 crew）
 5.agent返回内容都是一小段的文字，我认为需要更详细的返回（后端已完成 task_completed/delegation 事件，前端渲染未接 — roadmap P1-1）
 6.loop-agent实现，可能要重新建一个crew团队（未开始 — roadmap P2-5）

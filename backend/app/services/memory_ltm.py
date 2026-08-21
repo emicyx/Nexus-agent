@@ -12,11 +12,10 @@ import logging
 import concurrent.futures
 from datetime import datetime
 
-from sqlalchemy import create_engine, text as sa_text
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import text as sa_text
 
 from app.config import settings
-from app.db.session import AsyncSessionLocal
+from app.db.session import AsyncSessionLocal, get_sync_session
 from app.llm.embedding import embed_texts_sync
 from app.models import UserMemory
 
@@ -27,22 +26,6 @@ _ltm_extract_executor = concurrent.futures.ThreadPoolExecutor(
     max_workers=2, thread_name_prefix="ltm-extract",
 )
 _ltm_extractor_llm = None  # AliyunLLM 单例，延迟初始化
-
-# ---------- 同步 DB engine（后台线程内使用） ----------
-_sync_engine = None
-_SyncSessionLocal = None
-
-
-def _get_sync_session() -> Session:
-    """延迟初始化同步 DB engine（psycopg2），供后台线程使用。"""
-    global _sync_engine, _SyncSessionLocal
-    if _SyncSessionLocal is None:
-        dsn = settings.POSTGRES_DSN
-        if dsn.startswith("postgresql+asyncpg://"):
-            dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
-        _sync_engine = create_engine(dsn, pool_pre_ping=True, future=True)
-        _SyncSessionLocal = sessionmaker(bind=_sync_engine, expire_on_commit=False)
-    return _SyncSessionLocal()
 
 
 def _get_extractor_llm():
@@ -217,7 +200,7 @@ def _run_memory_extraction(
             return
 
         # 4. 同步入库
-        with _get_sync_session() as db:
+        with get_sync_session() as db:
             for c, emb in zip(candidates, embeddings):
                 vec_str = "[" + ",".join(str(x) for x in emb) + "]"
                 db.execute(

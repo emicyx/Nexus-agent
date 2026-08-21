@@ -2,110 +2,27 @@
 
 对接 pgvector + zhparser 中文全文检索，让 Agent 能自主决定何时调用知识库检索。
 - _run 是同步方法，CrewAI akickoff() 在主事件循环中调用，不能用 asyncio.run
-- 用同步 SQLAlchemy（psycopg2）+ 同步 requests 调 embedding API
+- 同步 DB Session（db.session.get_sync_session）+ 同步 embedding（llm.embedding.embed_texts_sync）
+- 混合检索 SQL 与 API 路径共用 services/hybrid_search.py
 """
 import logging
-import os
 from typing import Any, Optional, Union
 
-import requests
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import create_engine, text as sa_text
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import text as sa_text
 
-from app.config import settings
-from app.models import DocumentChunk, DocumentConfig
-from app.services.keyword_search import build_or_tsquery
+from app.db.session import get_sync_session, vec_to_sql_literal
+from app.llm.embedding import embed_texts_sync
+from app.services.hybrid_search import (
+    HYBRID_SQL,
+    LEXEME_SQL,
+    build_tsquery,
+    hybrid_params,
+    map_rows,
+)
 
 logger = logging.getLogger("rag_tool")
-
-# 同步 engine（psycopg2），延迟初始化避免启动时连不上 DB
-_sync_engine = None
-_SyncSessionLocal = None
-
-# RRF 融合参数
-_RRF_K = 60
-_RRF_POOL = 200
-
-
-def _get_sync_session() -> Session:
-    """延迟初始化同步 DB engine，返回 session。"""
-    global _sync_engine, _SyncSessionLocal
-    if _SyncSessionLocal is None:
-        # 把 postgresql+asyncpg:// 转回 postgresql://（psycopg2）
-        dsn = settings.POSTGRES_DSN
-        if dsn.startswith("postgresql+asyncpg://"):
-            dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
-        elif dsn.startswith("postgresql://"):
-            pass  # psycopg2 原生
-        _sync_engine = create_engine(dsn, pool_pre_ping=True, future=True)
-        _SyncSessionLocal = sessionmaker(bind=_sync_engine, expire_on_commit=False)
-    return _SyncSessionLocal()
-
-
-def _embed_query_sync(text: str) -> list[float]:
-    """同步调用 DashScope embedding API。"""
-    api_key = os.getenv("QWEN_API_KEY") or os.getenv("DASHSCOPE_API_KEY")
-    if not api_key:
-        raise ValueError("缺少 QWEN_API_KEY")
-    url = "https://dashscope.aliyuncs.com/compatible-mode/v1/embeddings"
-    payload = {
-        "model": settings.EMBEDDING_MODEL,
-        "input": [text],
-        "dimensions": settings.EMBEDDING_DIM,
-        "encoding_format": "float",
-    }
-    r = requests.post(
-        url, json=payload,
-        headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
-        timeout=30,
-    )
-    r.raise_for_status()
-    return r.json()["data"][0]["embedding"]
-
-
-def _vec_to_sql_literal(vec: list[float]) -> str:
-    """把向量列表转成 pgvector 接受的字符串字面量。"""
-    return "[" + ",".join(repr(float(x)) for x in vec) + "]"
-
-
-# 混合检索 SQL：向量路 + 关键词路 RRF 融合
-# 注意：关键词路必须用 plainto_tsquery('chinese', :q) 生成 tsquery，
-# 不能直接把原始查询字符串传给 @@（会被隐式当作 tsquery 解析，中文+空格会报语法错误）
-_HYBRID_SQL = sa_text("""
-WITH vec AS (
-    SELECT dc.id AS chunk_id, dc.content AS content, dc.position AS position,
-           doc.name AS document_name,
-           ROW_NUMBER() OVER (ORDER BY dc.embedding <=> CAST(:query_vec AS vector)) AS rn
-    FROM document_chunks dc
-    JOIN document_configs doc ON dc.document_id = doc.id
-    WHERE (:doc_id IS NULL OR dc.document_id = :doc_id)
-    ORDER BY dc.embedding <=> CAST(:query_vec AS vector)
-    LIMIT :pool
-),
-kw AS (
-    SELECT dc.id AS chunk_id, dc.content AS content, dc.position AS position,
-           doc.name AS document_name,
-           ROW_NUMBER() OVER (ORDER BY ts_rank(dc.tsv, to_tsquery('chinese', :tsq)) DESC) AS rn
-    FROM document_chunks dc
-    JOIN document_configs doc ON dc.document_id = doc.id
-    WHERE dc.tsv @@ to_tsquery('chinese', :tsq)
-      AND (:doc_id IS NULL OR dc.document_id = :doc_id)
-    ORDER BY ts_rank(dc.tsv, to_tsquery('chinese', :tsq)) DESC
-    LIMIT :pool
-)
-SELECT COALESCE(vec.chunk_id, kw.chunk_id) AS chunk_id,
-       COALESCE(vec.content, kw.content) AS content,
-       COALESCE(vec.position, kw.position) AS position,
-       COALESCE(vec.document_name, kw.document_name) AS document_name,
-       ( COALESCE(1.0 / (:k + vec.rn), 0.0)
-         + COALESCE(1.0 / (:k + kw.rn), 0.0) ) AS rrf_score
-FROM vec
-FULL OUTER JOIN kw ON vec.chunk_id = kw.chunk_id
-ORDER BY rrf_score DESC
-LIMIT :top_k
-""")
 
 
 def _search_sync(
@@ -114,32 +31,16 @@ def _search_sync(
     document_id: int | None = None,
 ) -> list[dict]:
     """同步执行向量 + 关键词 RRF 混合检索。"""
-    query_vec = _embed_query_sync(query)
-    vec_literal = _vec_to_sql_literal(query_vec)
-    with _get_sync_session() as session:
+    query_vec = embed_texts_sync([query])[0]
+    vec_literal = vec_to_sql_literal(query_vec)
+    with get_sync_session() as session:
         # 关键词 tsquery：zhparser 切词 + OR（过滤停用词），修复全 AND 零命中
-        lexemes = session.execute(
-            sa_text("SELECT lexeme FROM unnest(to_tsvector('chinese', :q))"),
-            {"q": query},
-        ).scalars().all()
-        tsq = build_or_tsquery(list(lexemes)) or "zzzz_nomatch"
-        rows = session.execute(_HYBRID_SQL, {
-            "query_vec": vec_literal,
-            "tsq": tsq,
-            "doc_id": document_id,
-            "pool": _RRF_POOL,
-            "k": _RRF_K,
-            "top_k": top_k,
-        }).all()
-        results = []
-        for r in rows:
-            results.append({
-                "content": r.content,
-                "document_name": r.document_name,
-                "position": r.position,
-                "score": float(r.rrf_score) if r.rrf_score is not None else 0.0,
-            })
-        return results
+        lexemes = session.execute(LEXEME_SQL, {"q": query}).scalars().all()
+        tsq = build_tsquery(list(lexemes))
+        rows = session.execute(
+            HYBRID_SQL, hybrid_params(vec_literal, tsq, document_id, top_k)
+        ).all()
+        return map_rows(rows)
 
 
 class RagSearchInput(BaseModel):

@@ -12,8 +12,6 @@
     "next": "^14.2.5",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "clsx": "^2.1.1",
-    "tailwind-merge": "^2.4.0",
     "lucide-react": "^0.412.0"
   },
   "devDependencies": {

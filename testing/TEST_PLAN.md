@@ -1,4 +1,5 @@
 # Nexus 测试与评审规划（落地版）
+> ⚠️ 时效提示：本计划基于 2026-08-01 代码快照。P0/P1 后新增测试未收录（test_api_auth / test_net_guard / test_file_utils / test_keyword_search / test_semantic_chunker / test_sse_contract / test_factory_p0），SSE 事件类型已从 9 种扩展到 11 种（新增 task_completed / delegation）。
 
 > 生成时间：2026-08-01
 > 目的：为评价 Nexus 项目最终成果设计完整测试矩阵与评审标准。三层递进：纯逻辑单测 → API 集成（Mock LLM）→ 真实 E2E smoke。
@@ -88,3 +89,4 @@
 6. Docker 内逐个跑 Tier 3（真实 Key），记录 SSE trace + 耗时
 7. 按 11 维度代码走读，产出 `REVIEW_REPORT.md`
 8. 汇总最终成果评价 + 改进清单
+

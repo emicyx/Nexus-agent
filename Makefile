@@ -1,4 +1,4 @@
-.PHONY: up down logs psq backend-shell frontend-shell rebuild
+.PHONY: up down logs psql backend-shell frontend-shell rebuild
 
 up:
 	docker compose up --build -d

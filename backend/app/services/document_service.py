@@ -1,7 +1,7 @@
 """文档 RAG 服务（Week 4 + Week 9 混合检索）
 
 - ingest_document: 切块 + 嵌入 + 写库
-- search_documents: 向量 + 关键词 RRF 融合检索
+- search_documents: 向量 + 关键词 RRF 融合检索（SQL 与参数见 hybrid_search）
 - list_documents / delete_document
 
 Week 2026-08: 入库切块改为「句子级 Embedding 相似度语义分块」（semantic_chunker.semantic_chunk），
@@ -11,13 +11,20 @@ import asyncio
 import logging
 from typing import Any
 
-from sqlalchemy import delete, func, literal, select
+from sqlalchemy import func, select
 from sqlalchemy.sql import text as sa_text
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.db.session import vec_to_sql_literal
 from app.llm.embedding import embed_query, embed_texts
 from app.models import DocumentChunk, DocumentConfig
-from app.services.keyword_search import build_or_tsquery
+from app.services.hybrid_search import (
+    HYBRID_SQL,
+    LEXEME_SQL,
+    build_tsquery,
+    hybrid_params,
+    map_rows,
+)
 from app.services.semantic_chunker import semantic_chunk
 
 logger = logging.getLogger("document_service")
@@ -25,11 +32,6 @@ logger = logging.getLogger("document_service")
 # 分块参数（保留旧参数供 _split_chunks 单测参考；入库实际用 semantic_chunk）
 _CHUNK_MAX_CHARS = 500
 _PARA_SEP = "\n\n"
-
-# RRF 融合参数
-_RRF_K = 60
-# 每路预取上限（控制扫描成本）
-_RRF_POOL = 200
 
 
 def _split_chunks(text: str) -> list[str]:
@@ -96,30 +98,16 @@ async def ingest_document(
     return doc
 
 
-async def _build_keyword_tsquery(session: AsyncSession, query: str) -> str:
-    """用 zhparser 切词 + OR 构造关键词 tsquery。
-
-    修复 plainto_tsquery('chinese', q) 把全部 token AND 导致的零命中问题：
-    过滤停用词后 OR 连接，ts_rank 按覆盖率排序。无内容词时返回永不匹配的 tsquery。
-    """
-    lexemes = (await session.execute(
-        sa_text("SELECT lexeme FROM unnest(to_tsvector('chinese', :q))"),
-        {"q": query},
-    )).scalars().all()
-    tsq = build_or_tsquery(list(lexemes))
-    return tsq or "zzzz_nomatch"
-
-
 async def search_documents(
     session: AsyncSession,
     query: str,
     top_k: int = 5,
     document_id: int | None = None,
 ) -> list[dict[str, Any]]:
-    """混合检索：向量 + 关键词 RRF 融合。
+    """混合检索：向量 + 关键词 RRF 融合（SQL 见 hybrid_search.HYBRID_SQL）。
 
     向量路用 pgvector cosine_distance，关键词路用 zhparser 中文分词 ts_rank（OR tsquery）。
-    两路各取前 _RRF_POOL 条，用 RRF(k=60) 融合后取 top_k。
+    两路各取前 RRF_POOL 条，用 RRF(k=60) 融合后取 top_k。
 
     可选 document_id 限定检索范围。
 
@@ -129,81 +117,15 @@ async def search_documents(
         return []
     q = query.strip()
     query_vec = await embed_query(q)
-    tsq = func.to_tsquery("chinese", await _build_keyword_tsquery(session, q))
+    vec_literal = vec_to_sql_literal(query_vec)
 
-    # 向量路 CTE
-    vec_dist = DocumentChunk.embedding.cosine_distance(query_vec)
-    vec_sub = (
-        select(
-            DocumentChunk.id.label("chunk_id"),
-            DocumentChunk.content.label("content"),
-            DocumentChunk.position.label("position"),
-            DocumentConfig.name.label("document_name"),
-            func.row_number().over(order_by=vec_dist).label("rn"),
-        )
-        .join(DocumentConfig, DocumentChunk.document_id == DocumentConfig.id)
-        .order_by(vec_dist)
-        .limit(_RRF_POOL)
-    )
-    if document_id is not None:
-        vec_sub = vec_sub.where(DocumentChunk.document_id == document_id)
-    vec_cte = vec_sub.cte("vec")
+    lexemes = (await session.execute(LEXEME_SQL, {"q": q})).scalars().all()
+    tsq = build_tsquery(list(lexemes))
 
-    # 关键词路 CTE
-    kw_rank = func.ts_rank(DocumentChunk.tsv, tsq)
-    kw_sub = (
-        select(
-            DocumentChunk.id.label("chunk_id"),
-            DocumentChunk.content.label("content"),
-            DocumentChunk.position.label("position"),
-            DocumentConfig.name.label("document_name"),
-            func.row_number().over(order_by=kw_rank.desc()).label("rn"),
-        )
-        .join(DocumentConfig, DocumentChunk.document_id == DocumentConfig.id)
-        .where(DocumentChunk.tsv.op("@@")(tsq))
-        .order_by(kw_rank.desc())
-        .limit(_RRF_POOL)
-    )
-    if document_id is not None:
-        kw_sub = kw_sub.where(DocumentChunk.document_id == document_id)
-    kw_cte = kw_sub.cte("kw")
-
-    # FULL OUTER JOIN 后 RRF 融合
-    # coalesce(content/position/document_name) 因为两边都有
-    rrf_expr = (
-        func.coalesce(literal(1.0) / (_RRF_K + vec_cte.c.rn), literal(0.0))
-        + func.coalesce(literal(1.0) / (_RRF_K + kw_cte.c.rn), literal(0.0))
-    ).label("rrf_score")
-
-    fused = (
-        select(
-            func.coalesce(vec_cte.c.chunk_id, kw_cte.c.chunk_id).label("chunk_id"),
-            func.coalesce(vec_cte.c.content, kw_cte.c.content).label("content"),
-            func.coalesce(vec_cte.c.position, kw_cte.c.position).label("position"),
-            func.coalesce(vec_cte.c.document_name, kw_cte.c.document_name).label("document_name"),
-            rrf_expr,
-        )
-        .select_from(
-            vec_cte.outerjoin(
-                kw_cte,
-                vec_cte.c.chunk_id == kw_cte.c.chunk_id,
-                full=True,
-            )
-        )
-        .order_by(sa_text("rrf_score DESC"))
-        .limit(top_k)
-    )
-
-    rows = (await session.execute(fused)).all()
-    results = []
-    for r in rows:
-        results.append({
-            "content": r.content,
-            "document_name": r.document_name,
-            "position": r.position,
-            "score": float(r.rrf_score) if r.rrf_score is not None else 0.0,
-        })
-    return results
+    rows = (
+        await session.execute(HYBRID_SQL, hybrid_params(vec_literal, tsq, document_id, top_k))
+    ).all()
+    return map_rows(rows)
 
 
 async def list_documents(session: AsyncSession) -> list[dict[str, Any]]:
@@ -233,10 +155,6 @@ async def list_documents(session: AsyncSession) -> list[dict[str, Any]]:
     ]
 
 
-async def get_document(session: AsyncSession, doc_id: int) -> DocumentConfig | None:
-    return await session.get(DocumentConfig, doc_id)
-
-
 async def delete_document(session: AsyncSession, doc_id: int) -> bool:
     """删除文档（级联删除分块）。"""
     doc = await session.get(DocumentConfig, doc_id)
@@ -245,11 +163,6 @@ async def delete_document(session: AsyncSession, doc_id: int) -> bool:
     await session.delete(doc)
     await session.commit()
     return True
-
-
-async def count_chunks(session: AsyncSession, doc_id: int) -> int:
-    stmt = select(func.count(DocumentChunk.id)).where(DocumentChunk.document_id == doc_id)
-    return int((await session.execute(stmt)).scalar() or 0)
 
 
 async def search_kb_high_confidence(
@@ -267,7 +180,7 @@ async def search_kb_high_confidence(
         return []
     try:
         from app.db.session import AsyncSessionLocal
-        vec_str = "[" + ",".join(str(x) for x in query_vec) + "]"
+        vec_str = vec_to_sql_literal(query_vec)
         # 先取 3 倍候选，再按距离阈值过滤
         pool = top_k * 3
         stmt = sa_text(

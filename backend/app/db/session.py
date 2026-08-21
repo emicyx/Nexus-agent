@@ -4,15 +4,19 @@
 - engine / AsyncSessionLocal：全局引擎与会话工厂
 - get_db()：FastAPI 异步依赖，yield AsyncSession
 - init_db()：开发期快速建表（metadata.create_all），正式迁移用 Alembic
+- get_sync_session()：同步 Session 工厂（CrewAI 工具 _run / 后台线程使用，
+  历史上 rag_search_tool / kb_ingest_tool / memory_ltm 各自维护过一份，
+  现统一收敛到此处，避免多个独立连接池）
 """
 import logging
 
-from sqlalchemy import text as sa_text
+from sqlalchemy import create_engine, text as sa_text
 from sqlalchemy.ext.asyncio import (
     AsyncSession,
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.orm import Session, sessionmaker
 
 from app.config import settings
 
@@ -66,3 +70,38 @@ async def init_db() -> None:
         await conn.execute(sa_text("CREATE EXTENSION IF NOT EXISTS vector;"))
         await conn.run_sync(Base.metadata.create_all)
     logger.info("init_db: tables ensured (create_all + vector ext)")
+
+
+# ---------- 同步 Session 工厂（CrewAI 工具 / 后台线程） ----------
+
+_sync_engine = None
+_SyncSessionLocal: sessionmaker | None = None
+
+
+def _make_sync_dsn(dsn: str) -> str:
+    """将 asyncpg 风格 DSN 转为 psycopg2 风格（postgresql://）。"""
+    if dsn.startswith("postgresql+asyncpg://"):
+        return dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
+    return dsn
+
+
+def get_sync_session() -> Session:
+    """同步 Session（psycopg2），延迟初始化避免启动时连不上 DB。
+
+    CrewAI akickoff() 在主事件循环调用工具 _run，不能用 asyncio；
+    后台线程（LTM 提取等）同理。全项目唯一的同步 engine。
+    """
+    global _sync_engine, _SyncSessionLocal
+    if _SyncSessionLocal is None:
+        _sync_engine = create_engine(
+            _make_sync_dsn(settings.POSTGRES_DSN),
+            pool_pre_ping=True,
+            future=True,
+        )
+        _SyncSessionLocal = sessionmaker(bind=_sync_engine, expire_on_commit=False)
+    return _SyncSessionLocal()
+
+
+def vec_to_sql_literal(vec: list[float]) -> str:
+    """把向量列表格式化为 pgvector 接受的字符串字面量（裸 SQL 参数用）。"""
+    return "[" + ",".join(repr(float(x)) for x in vec) + "]"

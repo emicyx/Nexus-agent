@@ -42,6 +42,8 @@ sse_deepseek.txt
 tmp/
 # 简历类私人文档不推送（testing/ 测试代码本身需提交）
 testing/*简历*
+# RAG 评测的可再生运行结果（重跑 eval_rag/eval_rag.py 生成）
+testing/eval_rag/results/
 
 # —— OS ——
 .DS_Store

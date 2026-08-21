@@ -147,6 +147,7 @@ export default function ChatPage() {
     ? {
         name: selectedCrew.name,
         agents: selectedCrew.agents.map((a) => ({ id: a.id, name: a.name, role: a.role })),
+        managerRole: selectedCrew.manager_agent?.role ?? null,
       }
     : null;
 

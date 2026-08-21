@@ -1,4 +1,5 @@
 # Nexus 项目评审报告
+> ⚠️ 时效提示：本报告基于 2026-08-01 代码快照，早于 P0 安全加固与 P1 健壮性整改（X-API-Key 鉴权、文件沙箱、SSRF 防护、SSE 契约测试等）。文中"无鉴权/无自动化测试"等结论已过时，最新状态见 doc/architecture.md 与 doc/roadmap.md。
 
 > 评审对象：Project Nexus（CrewAI 多智能体 Web 平台）
 > 评审基线：通用软件质量（架构/可维护性/健壮性/安全/可观测性/性能/数据/前端/文档/技术债）
@@ -129,3 +130,4 @@ CrewAI 1.9.3 自带真正异步的 `Crew.akickoff()`（原生 await 编排，`cr
 - 附带修复：playwright_tools 的 `sync_playwright()` 不再在 loop 内崩溃（工具 now worker 线程执行）
 
 **残余**：hierarchical 委派子 agent 仍同步 `execute_task`（运行在 worker 线程内，loop 不受影响，可接受）；e2e conftest 的 session 级 client 曾致 "Event loop is closed"（改为 function 级修复）。
+

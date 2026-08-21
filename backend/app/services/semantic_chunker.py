@@ -57,10 +57,6 @@ def _cosine(a: list[float], b: list[float]) -> float:
     return dot / (na * nb)
 
 
-def _vec_to_sql_literal(vec: list[float]) -> str:
-    return "[" + ",".join(repr(float(x)) for x in vec) + "]"
-
-
 # ---------- 同步 Embedding（共享给两条入库路径） ----------
 
 def embed_texts_sync(texts: list[str], batch_size: int = _EMBED_BATCH) -> list[list[float]]:

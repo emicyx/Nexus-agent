@@ -18,7 +18,7 @@ export type ChatEvent =
     }
   | { type: "token"; content: string }
   | { type: "final_answer"; content: string }
-  | { type: "task_completed"; content: string; agent: string; output?: { task_name: string; agent: string; output_format: string; pydantic_valid: boolean; raw_preview: string } }
+  | { type: "task_completed"; content: string; agent: string; output?: { task_name: string; agent: string; output_format: string; pydantic_valid: boolean; has_output_schema?: boolean; raw_preview: string } }
   | { type: "delegation"; content: string; agent: string; input?: { task: string; context: string; coworker: string } }
   | { type: "error"; content: string; error_kind?: string }
   | { type: "done" };

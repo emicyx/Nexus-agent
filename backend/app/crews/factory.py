@@ -318,6 +318,9 @@ async def build_crew_from_db(
             # Week 15：CrewAI 内置记忆默认关闭（项目用自带三层记忆），由总开关统一控制
             memory=acfg.memory and settings.CREWAI_NATIVE_MEMORY_ENABLED,
             tools=tools,
+            # 注入当天日期（task prompt 追加 Current Date），否则模型会虚构
+            # published/日期子目录（实测连续出现 2026-05-22 / 2026-08-17 / 2024-07-15）
+            inject_date=True,
         )
         agent_map[acfg.id] = agent
 
@@ -352,12 +355,15 @@ async def build_crew_from_db(
             max_iter=mgr_cfg.max_iter,
             memory=mgr_cfg.memory and settings.CREWAI_NATIVE_MEMORY_ENABLED,
             allow_delegation=True,
+            inject_date=True,
         )
 
     # 构造 Task 实例（按 position 顺序，先建后建可引用为 context）
     task_map: dict[int, Task] = {}
     tasks: list[Task] = []
     agent_names_by_task: list[str] = []  # 按 task 执行顺序的 agent 角色名
+    # task name → 是否配置 output_schema（task_callback 的 has_output_schema 用）
+    task_schema_flags: dict[str, bool] = {}
     # 跟踪是否至少一个 task 声明了 {user_input} 占位符（否则用户输入/STM 历史会静默丢失）
     has_user_input_placeholder = False
     for tcfg in tasks_cfg:
@@ -398,6 +404,7 @@ async def build_crew_from_db(
         )
         # agent 为 None 时（hierarchical），用 manager role 占位
         agent_names_by_task.append(agent.role if agent else (manager_agent.role if manager_agent else "Agent"))
+        task_schema_flags[tcfg.name] = output_pydantic is not None
         task_map[tcfg.id] = task
         tasks.append(task)
 
@@ -433,11 +440,12 @@ async def build_crew_from_db(
             queue, loop, callback_agent_names,
             manager_role=manager_agent.role if is_hierarchical and manager_agent else None,
         ),
-        task_callback=_make_task_callback(queue, loop),
+        task_callback=_make_task_callback(queue, loop, task_schema_flags),
     )
     if is_hierarchical and manager_agent:
         crew_kwargs["manager_agent"] = manager_agent
-        _wrap_delegate_tool_for_tracing(manager_agent, queue, loop)
+        # 委派事件上下文：patched_execute（必经路径）发射 delegation SSE
+        _delegation_event_ctx.set((queue, loop, manager_agent.role))
 
         # ── hierarchical 委派 output_pydantic 注入 ──
         # 在 manager 委派任务给 sub-agent 时，CrewAI 的 BaseAgentTool._execute()
@@ -663,8 +671,15 @@ def _build_pydantic_from_schema(schema_cfg: OutputSchemaConfig) -> type[Pydantic
 def _make_task_callback(
     queue: "asyncio.Queue[AgentEvent | None]",
     loop: asyncio.AbstractEventLoop,
+    task_schema_flags: dict[str, bool] | None = None,
 ):
-    """CrewAI task_callback：每个 Task 完成后推送结构化事件到 SSE。"""
+    """CrewAI task_callback：每个 Task 完成后推送结构化事件到 SSE。
+
+    task_schema_flags: task name → 是否配置了 output_schema（build 时采集）。
+    has_output_schema=false 时 pydantic_valid 恒为 false（无 schema 可解析），
+    前端据此隐藏校验徽标，避免"结构化校验未通过"的误导。
+    """
+    flags = task_schema_flags or {}
 
     def callback(task_output: TaskOutput) -> None:
         evt = AgentEvent(
@@ -676,6 +691,7 @@ def _make_task_callback(
                 "agent": task_output.agent,
                 "output_format": str(task_output.output_format),
                 "pydantic_valid": task_output.pydantic is not None,
+                "has_output_schema": flags.get(task_output.name, False),
                 "raw_preview": str(task_output.raw)[:300],
             },
         )
@@ -684,47 +700,40 @@ def _make_task_callback(
     return callback
 
 
-# ---------- Tracing：delegation 事件包装 ----------
+# ---------- Tracing：hierarchical 委派 SSE 事件 ----------
+
+# 请求级委派事件上下文：(queue, loop, manager_role)。
+# CrewAI 在 kickoff 时才给 manager 注入 DelegateWorkTool（build 时拿不到、
+# agent.core 也无 agent_tools 属性），旧的"包装 manager 委派工具"方案是死代码。
+# 现改为在 BaseAgentTool._execute patch（必经路径）里经 ContextVar 发射，
+# 与 _delegation_pydantic_map_ctx 相同的请求级隔离机制。
+_delegation_event_ctx: contextvars.ContextVar[
+    tuple | None  # (queue, loop, manager_role)
+] = contextvars.ContextVar("_delegation_event_ctx", default=None)
 
 
-def _wrap_delegate_tool_for_tracing(
-    manager_agent: Agent,
-    queue: "asyncio.Queue[AgentEvent | None]",
-    loop: asyncio.AbstractEventLoop,
-) -> None:
-    """包装 manager agent 的 DelegateWorkTool，推送 delegation SSE 事件。"""
+def _emit_delegation_event(agent_name: str, task: str, context: str | None) -> None:
+    """在委派实际发生时推送 delegation SSE 事件（失败不影响委派本身）。"""
+    ctx_val = _delegation_event_ctx.get()
+    if ctx_val is None:
+        return
+    queue, loop, manager_role = ctx_val
     try:
-        agent_tools = getattr(manager_agent, "agent_tools", None)
-        if agent_tools is None:
-            return
-        for tool_wrapper in agent_tools:
-            tool = getattr(tool_wrapper, "tool", tool_wrapper)
-            tool_name = getattr(tool, "name", "")
-            if "delegate" not in tool_name.lower():
-                continue
-            original_run = tool._run
-
-            def wrapped_run(*args, task=None, context=None, coworker=None, **kwargs):
-                loop.call_soon_threadsafe(
-                    queue.put_nowait,
-                    AgentEvent(
-                        type="delegation",
-                        agent=manager_agent.role,
-                        content=f"委派任务给 {coworker or '?'}",
-                        input={
-                            "task": (task or "")[:200],
-                            "context": (context or "")[:200],
-                            "coworker": coworker,
-                        },
-                    ),
-                )
-                return original_run(*args, task=task, context=context, coworker=coworker, **kwargs)
-
-            tool._run = wrapped_run  # type: ignore[method-assign]
-            logger.info("delegation tracing: wrapped DelegateWorkTool for manager=%s", manager_agent.role)
-            return
-    except Exception as e:
-        logger.warning(f"delegation tracing: failed to wrap DelegateWorkTool: {e}")
+        loop.call_soon_threadsafe(
+            queue.put_nowait,
+            AgentEvent(
+                type="delegation",
+                agent=manager_role,
+                content=f"委派任务给 {agent_name or '?'}",
+                input={
+                    "task": (task or "")[:200],
+                    "context": (context or "")[:200],
+                    "coworker": agent_name,
+                },
+            ),
+        )
+    except Exception as e:  # noqa: BLE001 - 事件推送失败不能中断委派
+        logger.warning(f"delegation event emit failed: {e}")
 
 
 # ---------- Tracing：hierarchical 委派 output_pydantic 注入 ----------
@@ -834,6 +843,10 @@ def _apply_delegation_pydantic_patch() -> None:
             )
 
         selected_agent = agent[0]
+
+        # 委派事件：委派实际发生的地方（原 _wrap_delegate_tool_for_tracing 因
+        # crewai 1.9.3 Agent 无 agent_tools 属性而永不生效）
+        _emit_delegation_event(agent_name, task, context)
 
         # ── 注入 output_pydantic ──
         output_pydantic = None
@@ -1129,11 +1142,12 @@ async def run_single_agent_chat(
     agent = Agent(
         role="通用助手",
         goal="准确、简洁地回答用户的问题",
-        backstory="你是一个直接、专业的中文助手。你会用清晰的中文回答问题，不啰嗦。",
+        backstory="你是一个直接、专业的中文助手。你会用清晰的中文回答，不啰嗦。",
         llm=llm,
         verbose=True,
         max_iter=8,
         memory=False,
+        inject_date=True,
     )
 
     task = Task(

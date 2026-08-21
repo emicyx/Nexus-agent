@@ -24,7 +24,7 @@ export function StepPanel({
 }: {
   steps: CollabStep[];
   isStreaming: boolean;
-  crewInfo?: { name: string; agents: { id: number; name: string; role: string }[] } | null;
+  crewInfo?: { name: string; agents: { id: number; name: string; role: string }[]; managerRole?: string | null } | null;
 }) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -111,7 +111,12 @@ export function StepPanel({
                 i === steps.length - 1 &&
                 (s.kind === "thinking" || s.kind === "thinking_streaming" || s.pending);
               return (
-                <StepCard key={s.id} step={s} isLatest={isLatest} />
+                <StepCard
+                  key={s.id}
+                  step={s}
+                  isLatest={isLatest}
+                  managerRole={crewInfo?.managerRole ?? undefined}
+                />
               );
             })}
             <div ref={bottomRef} />
@@ -122,9 +127,21 @@ export function StepPanel({
   );
 }
 
-function StepCard({ step, isLatest }: { step: CollabStep; isLatest?: boolean }) {
+function StepCard({
+  step,
+  isLatest,
+  managerRole,
+}: {
+  step: CollabStep;
+  isLatest?: boolean;
+  managerRole?: string;
+}) {
   const style = agentStyle(step.agent);
-  const isManager = step.agent === "团队主管";
+  // hierarchical 主管卡（Crown 图标 + 高亮）：按当前 crew 的实际 manager 角色匹配，
+  // 兼容旧数据无 managerRole 时回退到 team_orchestrator 的"团队主管"
+  const isManager = managerRole
+    ? step.agent === managerRole
+    : step.agent === "团队主管";
   const breathClass = isLatest ? " animate-breath" : "";
 
   if (step.kind === "tool_call") {
@@ -203,10 +220,12 @@ function StepCard({ step, isLatest }: { step: CollabStep; isLatest?: boolean }) 
           <span className="truncate text-xs font-medium text-sakura-600">
             {step.taskName || "任务"}
           </span>
-          {step.pydanticValid === true && (
+          {/* 仅当任务配置了 output_schema 时才显示校验徽标：
+              无 schema 时 pydantic_valid 恒为 false，显示红叉会误导 */}
+          {step.hasSchema && step.pydanticValid === true && (
             <BadgeCheck size={12} className="shrink-0 text-emerald-500" aria-label="结构化校验通过" />
           )}
-          {step.pydanticValid === false && (
+          {step.hasSchema && step.pydanticValid === false && (
             <BadgeX size={12} className="shrink-0 text-red-400" aria-label="结构化校验未通过" />
           )}
           {step.outputFormat && (

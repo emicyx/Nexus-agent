@@ -710,11 +710,18 @@ async def ensure_seed() -> None:
             memory=False,
         )
         # 工具种子（在 agent 引用之前定义）
+        # write_markdown 强制 HITL：是否调用 human_approval 由模型自主决定不可靠
+        # （实测会跳过），文件落盘是有用户可见副作用的操作，用 hook 硬性拦截。
         markdown_writer_tool = await _get_or_create_tool(
             session,
             name="write_markdown",
             tool_key="write_markdown",
             description="Markdown 文件写入工具，将 markdown 内容保存到磁盘",
+            config_json={
+                "hooks": [
+                    {"key": "hitl_pre_approval", "config": {"risk_level": "medium"}}
+                ]
+            },
         )
         view_file_tool = await _get_or_create_tool(
             session,

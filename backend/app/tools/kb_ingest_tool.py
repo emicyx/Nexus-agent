@@ -2,7 +2,7 @@
 
 同步实现（参考 rag_search_tool.py 同步模式）：
 - CrewAI akickoff() 在主事件循环调用 _run，不能用 asyncio.run
-- 用同步 SQLAlchemy（psycopg2）+ 同步 requests 调 embedding API
+- 同步 DB Session（db.session.get_sync_session）+ 同步 embedding（llm.embedding.embed_texts_sync）
 - 切块逻辑：semantic_chunker.semantic_chunk（句子级 Embedding 相似度语义分块）
 
 表结构：
@@ -17,35 +17,13 @@ from typing import Any
 
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import create_engine, text as sa_text
-from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy import text as sa_text
 
-from app.config import settings
+from app.db.session import get_sync_session, vec_to_sql_literal
 from app.llm.embedding import embed_texts_sync
 from app.services.semantic_chunker import semantic_chunk
 
 logger = logging.getLogger("kb_ingest")
-
-# 同步 engine（psycopg2），延迟初始化避免启动时连不上 DB
-_sync_engine = None
-_SyncSessionLocal = None
-
-
-def _get_sync_session() -> Session:
-    """延迟初始化同步 DB engine，返回 session。"""
-    global _sync_engine, _SyncSessionLocal
-    if _SyncSessionLocal is None:
-        dsn = settings.POSTGRES_DSN
-        if dsn.startswith("postgresql+asyncpg://"):
-            dsn = dsn.replace("postgresql+asyncpg://", "postgresql://", 1)
-        _sync_engine = create_engine(dsn, pool_pre_ping=True, future=True)
-        _SyncSessionLocal = sessionmaker(bind=_sync_engine, expire_on_commit=False)
-    return _SyncSessionLocal()
-
-
-def _vec_to_sql_literal(vec: list[float]) -> str:
-    """把向量列表转成 pgvector 接受的字符串字面量。"""
-    return "[" + ",".join(repr(float(x)) for x in vec) + "]"
 
 
 # SQL：插入文档
@@ -190,7 +168,7 @@ class KbIngestTool(BaseTool):
         # 同步写库
         t2 = time.perf_counter()
         try:
-            with _get_sync_session() as session:
+            with get_sync_session() as session:
                 # 插入文档
                 doc_id = session.execute(
                     _INSERT_DOC_SQL,
@@ -208,7 +186,7 @@ class KbIngestTool(BaseTool):
                 for idx, (chunk_text, emb) in enumerate(
                     zip(chunks, embeddings)
                 ):
-                    emb_literal = _vec_to_sql_literal(emb)
+                    emb_literal = vec_to_sql_literal(emb)
                     meta = json.dumps(
                         {"source": name, "position": idx},
                         ensure_ascii=False,

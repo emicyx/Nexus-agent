@@ -82,7 +82,3 @@ def instantiate_hook(
             hook_key, config, e,
         )
         return None
-
-
-# 可选项：供前端下拉选择 hook
-HOOK_OPTIONS = [{"key": k, "label": k} for k in sorted(HOOK_REGISTRY.keys())]

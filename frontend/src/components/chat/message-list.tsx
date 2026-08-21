@@ -1,6 +1,6 @@
 import { type Message, type Approval, type CollabStep } from "@/hooks/use-chat";
 import { agentStyle } from "@/lib/agent-style";
-import { Brain, User, Sparkles, Send, Loader2, Cpu } from "lucide-react";
+import { Brain, User, Sparkles, Send, Cpu } from "lucide-react";
 import { ApprovalList } from "./approval-card";
 
 export function MessageList({
