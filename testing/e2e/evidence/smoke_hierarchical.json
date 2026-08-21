@@ -1,0 +1,366 @@
+[
+  {
+    "type": "agent_thinking",
+    "data": {
+      "type": "agent_thinking",
+      "content": "Crew 启动（id=4）：DB 驱动装配，层级编排（manager agent 编排）",
+      "step": 0,
+      "agent": "Crew",
+      "ts": 1785566965.8423731
+    }
+  },
+  {
+    "type": "tool_call",
+    "data": {
+      "type": "tool_call",
+      "content": "",
+      "agent": "研究员",
+      "tool": "Save_Intermediate_Product_Tool",
+      "input": "{'intermediate_product': \"问题'1+1等于几'属于基础数学常识，无需检索私有知识库或公开网络信息；该结果是确定性事实，不依赖时效性或特定来源。\"}",
+      "ts": 1785566969.8757205
+    }
+  },
+  {
+    "type": "tool_result",
+    "data": {
+      "type": "tool_result",
+      "content": "",
+      "agent": "研究员",
+      "tool": "Save_Intermediate_Product_Tool",
+      "output": "中间结果已保存， 可以进行下一步Thought",
+      "ts": 1785566969.875748
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "{",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566970.5706303
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "\n  \"title",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566970.600149
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "\": \"1+1等于",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566970.6419027
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "几\",\n  \"key",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566970.744217
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "_facts\": [\"1+1",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566970.7942533
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "等于2\"],\n  \"",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566970.9202144
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "sources\": [\"基础数学公",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566970.9751828
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "理体系（皮亚",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.0826805
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "诺公理）\"],",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.138414
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "\n  \"summary\": \"1",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.235451
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "+1等于2，",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.304875
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "这是基于自然数定义",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.381933
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "和加法运算规则",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.4761467
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "得出的基本数学事实，",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.528227
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "由皮亚诺公理",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.6046438
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "系统严格推导得出",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.7141743
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "，属于普遍公认且无需",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.7769842
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "额外来源验证的确定",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.858639
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "性知识。\"\n}",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566971.9602695
+    }
+  },
+  {
+    "type": "task_completed",
+    "data": {
+      "type": "task_completed",
+      "content": "Task '针对用户问题进行信息收集：\n\n1+1等于几\n\n要求：\n1. 判断问题属于私有知识库内容还是公开网络信息\n2. 私有内容用 rag_search 检索知识库，公开内容用 search_web 联网搜索\n3. 用中间结果保存工具记录要点\n4. 输出整理后的素材摘要' 完成",
+      "agent": "团队主管",
+      "output": {
+        "task_name": "针对用户问题进行信息收集：\n\n1+1等于几\n\n要求：\n1. 判断问题属于私有知识库内容还是公开网络信息\n2. 私有内容用 rag_search 检索知识库，公开内容用 search_web 联网搜索\n3. 用中间结果保存工具记录要点\n4. 输出整理后的素材摘要",
+        "agent": "团队主管",
+        "output_format": "OutputFormat.PYDANTIC",
+        "pydantic_valid": true,
+        "raw_preview": "{\n  \"title\": \"1+1等于几\",\n  \"key_facts\": [\"1+1等于2\"],\n  \"sources\": [\"基础数学公理体系（皮亚诺公理）\"],\n  \"summary\": \"1+1等于2，这是基于自然数定义和加法运算规则得出的基本数学事实，由皮亚诺公理系统严格推导得出，属于普遍公认且无需额外来源验证的确定性知识。\"\n}"
+      },
+      "ts": 1785566972.5419276
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "1",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566977.254588
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "+1等于",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566977.2790473
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "2。",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566977.313779
+    }
+  },
+  {
+    "type": "agent_thinking",
+    "data": {
+      "type": "agent_thinking",
+      "content": "AgentFinish(thought='Failed to parse LLM response', output='1+1等于2。', text='1+1等于2。')",
+      "step": 1,
+      "agent": "团队主管",
+      "ts": 1785566977.3387477
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "1",
+      "step": 2,
+      "agent": "研究员",
+      "ts": 1785566978.0720227
+    }
+  },
+  {
+    "type": "token",
+    "data": {
+      "type": "token",
+      "content": "1",
+      "ts": 1785566978.0720572
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "+1等于",
+      "step": 2,
+      "agent": "研究员",
+      "ts": 1785566978.088816
+    }
+  },
+  {
+    "type": "token",
+    "data": {
+      "type": "token",
+      "content": "+1等于",
+      "ts": 1785566978.088841
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "2。",
+      "step": 2,
+      "agent": "研究员",
+      "ts": 1785566978.1309352
+    }
+  },
+  {
+    "type": "token",
+    "data": {
+      "type": "token",
+      "content": "2。",
+      "ts": 1785566978.1309614
+    }
+  },
+  {
+    "type": "task_completed",
+    "data": {
+      "type": "task_completed",
+      "content": "Task '基于收集的素材，针对用户问题撰写最终回答：\n\n原始问题：1+1等于几\n\n要求：\n1. 语言流畅、条理清晰\n2. 如有多种观点请客观呈现\n3. 用中文回答' 完成",
+      "agent": "团队主管",
+      "output": {
+        "task_name": "基于收集的素材，针对用户问题撰写最终回答：\n\n原始问题：1+1等于几\n\n要求：\n1. 语言流畅、条理清晰\n2. 如有多种观点请客观呈现\n3. 用中文回答",
+        "agent": "团队主管",
+        "output_format": "OutputFormat.RAW",
+        "pydantic_valid": false,
+        "raw_preview": "1+1等于2。"
+      },
+      "ts": 1785566978.4584057
+    }
+  },
+  {
+    "type": "final_answer",
+    "data": {
+      "type": "final_answer",
+      "content": "1+1等于2。",
+      "ts": 1785566978.5171247
+    }
+  },
+  {
+    "type": "done",
+    "data": {
+      "type": "done",
+      "content": "",
+      "ts": 1785566978.5174983
+    }
+  }
+]

@@ -1,0 +1,158 @@
+{
+  "meta": {
+    "description": "Nexus RAG 知识库量化评估测试集 v2（2026-08-02）",
+    "corpus_note": "语料为 6 份项目真实文档：架构白皮书 / 工具开发指南 / 项目进度 / 设计文档 / 简历梳理 / README",
+    "design_note": "15 条用例覆盖多种题型：事实查询 / 定义机制 / 列表枚举 / 程序步骤 / 性能事实 / 否定无答案类",
+    "metric_definitions": {
+      "recall": "Recall@k = |检索命中的黄金分块 ∩ 真实黄金分块| / 真实黄金分块数",
+      "precision": "Precision@k = |检索命中的黄金分块 ∩ 真实黄金分块| / k",
+      "mrr": "MRR = 首个黄金分块排名的倒数",
+      "ndcg": "NDCG@k（二进制相关性，黄金分块=1）"
+    }
+  },
+  "corpus": [
+    { "file": "doc/architecture.md", "name": "Nexus架构白皮书", "source_type": "text" },
+    { "file": "doc/tool-guide.md", "name": "Nexus工具开发指南", "source_type": "text" },
+    { "file": "doc/进度.md", "name": "Nexus项目进度文档", "source_type": "text" },
+    { "file": "doc/设计文档.txt", "name": "Nexus设计文档", "source_type": "text" },
+    { "file": "doc/简历项目梳理-Nexus.md", "name": "Nexus简历梳理", "source_type": "text" },
+    { "file": "README.md", "name": "Nexus项目README", "source_type": "text" }
+  ],
+  "queries": [
+    {
+      "id": "q01",
+      "type": "事实查询",
+      "query": "Nexus 平台的数据库技术选型是什么？",
+      "golden_phrase": "PostgreSQL 16 + pgvector",
+      "expected_answer": "数据库采用 PostgreSQL 16 + pgvector，用于业务配置与向量检索（RAG）。",
+      "source_doc": "Nexus架构白皮书",
+      "run_chat": true
+    },
+    {
+      "id": "q02",
+      "type": "事实查询",
+      "query": "Nexus 后端的代码规模有多大？",
+      "golden_phrase": "81 个 Python 文件",
+      "expected_answer": "后端有 81 个 Python 文件（约 9.3k 行），前端 19 个 TS/TSX 文件，Docker Compose 4 容器。",
+      "source_doc": "Nexus简历梳理",
+      "run_chat": true
+    },
+    {
+      "id": "q03",
+      "type": "事实查询",
+      "query": "项目自研了多少个 Agent 工具？",
+      "golden_phrase": "22 个 Agent 工具",
+      "expected_answer": "项目自研了 22 个 Agent 工具。",
+      "source_doc": "Nexus简历梳理",
+      "run_chat": false
+    },
+    {
+      "id": "q04",
+      "type": "列表枚举",
+      "query": "Nexus 预置了哪几套多 Agent 团队？",
+      "golden_phrase": "5 套预置多 Agent 团队",
+      "expected_answer": "预置了 5 套多 Agent 团队：研究写作、知识库问答、安全审查、主管编排、网页知识入库。",
+      "source_doc": "Nexus简历梳理",
+      "run_chat": true
+    },
+    {
+      "id": "q05",
+      "type": "事实查询",
+      "query": "项目基于哪个版本的 CrewAI？",
+      "golden_phrase": "CrewAI 1.9.3",
+      "expected_answer": "项目基于 CrewAI 1.9.3。",
+      "source_doc": "Nexus简历梳理",
+      "run_chat": true
+    },
+    {
+      "id": "q06",
+      "type": "定义机制",
+      "query": "hierarchical 模式下 manager_agent 有什么限制？",
+      "golden_phrase": "manager_agent 仅负责拆解和委派，不能直接调用工具",
+      "expected_answer": "manager_agent 仅负责拆解和委派，不能直接调用工具（CrewAI 限制）。",
+      "source_doc": "Nexus架构白皮书",
+      "run_chat": true
+    },
+    {
+      "id": "q07",
+      "type": "定义机制",
+      "query": "HITL 人类审批是怎么实现的？",
+      "golden_phrase": "Redis 状态机挂起",
+      "expected_answer": "基于 Redis 状态机：自定义审批工具将审批单写入 Redis 状态，前端通过 REST API 修改状态，工具检测到变更后返回。",
+      "source_doc": "Nexus设计文档",
+      "run_chat": true
+    },
+    {
+      "id": "q08",
+      "type": "定义机制",
+      "query": "工具内部访问数据库和 Redis 应使用什么客户端？",
+      "golden_phrase": "同步 SQLAlchemy engine (psycopg2) 和同步 redis.Redis",
+      "expected_answer": "访问数据库用同步 SQLAlchemy engine（psycopg2），访问 Redis 用同步 redis.Redis，因为工具在主事件循环里被调用，asyncio.run() 会报错。",
+      "source_doc": "Nexus架构白皮书",
+      "run_chat": true
+    },
+    {
+      "id": "q09",
+      "type": "列表枚举",
+      "query": "把 CrewAI 搬到 Web 面临哪三大技术鸿沟？",
+      "golden_phrase": "三大核心鸿沟",
+      "expected_answer": "三大鸿沟：多智能体流式输出、人类在环 HITL、配置热更新。",
+      "source_doc": "Nexus简历梳理",
+      "run_chat": true
+    },
+    {
+      "id": "q10",
+      "type": "定义机制",
+      "query": "项目的外部记忆分几层？各层职责是什么？",
+      "golden_phrase": "三层外部记忆",
+      "expected_answer": "三层外部记忆：L1 STM 会话内上下文、L2 LTM 跨会话用户偏好/事实/经验、L3 KB 知识库高置信预注入。",
+      "source_doc": "Nexus简历梳理",
+      "run_chat": true
+    },
+    {
+      "id": "q11",
+      "type": "程序步骤",
+      "query": "开发自定义工具需要遵循哪些步骤？",
+      "golden_phrase": "继承 `BaseTool`",
+      "expected_answer": "继承 BaseTool 定义 name/description/args_schema，实现 _run() 方法，在 tool_registry 注册 tool_key。",
+      "source_doc": "Nexus工具开发指南",
+      "run_chat": true
+    },
+    {
+      "id": "q12",
+      "type": "程序步骤",
+      "query": "如何启动整个项目？",
+      "golden_phrase": "make up",
+      "expected_answer": "先 cp .env.example .env 填好 QWEN_API_KEY，然后执行 make up 启动全部服务。",
+      "source_doc": "Nexus项目README",
+      "run_chat": false
+    },
+    {
+      "id": "q13",
+      "type": "性能事实",
+      "query": "LongTermMemory 的评估延迟从多少优化到了多少？",
+      "golden_phrase": "9-11s",
+      "expected_answer": "LongTermMemory 的 TaskEvaluator 评估延迟从同步 9-11s 优化到异步 + 独立小模型 1-2s。",
+      "source_doc": "Nexus简历梳理",
+      "run_chat": true
+    },
+    {
+      "id": "q14",
+      "type": "性能事实",
+      "query": "STM 短期记忆的压缩规则是什么？",
+      "golden_phrase": "滑窗 6 条",
+      "expected_answer": "三级压缩：滑窗只留最近 6 条 + 单条截断 500 字 + 总量 3000 字兜底。",
+      "source_doc": "Nexus简历梳理",
+      "run_chat": false
+    },
+    {
+      "id": "q15",
+      "type": "否定无答案",
+      "query": "Nexus 支持多租户和 RBAC 权限吗？",
+      "golden_phrase": "单用户无 RBAC",
+      "expected_answer": "不支持，当前是单用户无 RBAC，属于已知限制，未来方向是 tenant_id 行级隔离 + RBAC。",
+      "source_doc": "Nexus架构白皮书",
+      "run_chat": true
+    }
+  ]
+}

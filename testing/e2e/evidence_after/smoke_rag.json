@@ -1,0 +1,144 @@
+[
+  {
+    "type": "agent_thinking",
+    "data": {
+      "type": "agent_thinking",
+      "content": "Crew 启动（id=2）：DB 驱动装配，顺序协作",
+      "step": 0,
+      "agent": "Crew",
+      "ts": 1785572947.6792297
+    }
+  },
+  {
+    "type": "tool_call",
+    "data": {
+      "type": "tool_call",
+      "content": "",
+      "agent": "知识库问答助手",
+      "tool": "rag_search",
+      "input": "{'query': '公司年假天数 工作满三年', 'top_k': 5, 'document_id': None}",
+      "ts": 1785572949.053055
+    }
+  },
+  {
+    "type": "tool_result",
+    "data": {
+      "type": "tool_result",
+      "content": "",
+      "agent": "知识库问答助手",
+      "tool": "rag_search",
+      "output": "知识库检索出错: (psycopg2.errors.SyntaxError) syntax error in tsquery: \"公司年假天数 工作满三年\"\nLINE 18:     WHERE dc.tsv @@ '公司年假天数 工作满三年'\n                             ^\n\n[SQL: \nWITH vec AS (\n    SELECT dc.id AS chunk_id, dc.content AS content, dc.position AS position,\n           doc.name AS document_name,\n           ROW_NUMBER() OVER (ORDER BY dc.embedding <=> CAST(%(query_vec)s AS vector)) AS rn\n    FROM document_chunks dc\n    JOIN document_configs doc ON dc.document_id = doc.id\n    WHERE (%(doc_id)s IS NULL ...(truncated)",
+      "ts": 1785572949.2646594
+    }
+  },
+  {
+    "type": "tool_call",
+    "data": {
+      "type": "tool_call",
+      "content": "",
+      "agent": "知识库问答助手",
+      "tool": "rag_search",
+      "input": "{'query': '公司年假规定', 'top_k': 5, 'document_id': None}",
+      "ts": 1785572950.4546125
+    }
+  },
+  {
+    "type": "tool_result",
+    "data": {
+      "type": "tool_result",
+      "content": "",
+      "agent": "知识库问答助手",
+      "tool": "rag_search",
+      "output": "在知识库中找到 5 条相关结果：\n\n结果1: [e2e_rag_doc] (相似度=0.016)\n  内容: 公司请假制度：\n\n结果2: [e2e_rag_doc] (相似度=0.016)\n  内容: 公司请假制度：\n\n结果3: [e2e_rag_doc] (相似度=0.016)\n  内容: 员工年假为 5 天，工作满三年后增至 10 天。\n\n结果4: [e2e_rag_doc] (相似度=0.016)\n  内容: 员工年假为 5 天，工作满三年后增至 10 天。\n\n结果5: [e2e_rag_doc] (相似度=0.015)\n  内容: 请假需提前一天申请，需直属主管审批。\n",
+      "ts": 1785572950.789634
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "公司",
+      "step": 1,
+      "agent": "知识库问答助手",
+      "ts": 1785572951.4645097
+    }
+  },
+  {
+    "type": "token",
+    "data": {
+      "type": "token",
+      "content": "公司",
+      "ts": 1785572951.464517
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "年假为",
+      "step": 1,
+      "agent": "知识库问答助手",
+      "ts": 1785572951.4824727
+    }
+  },
+  {
+    "type": "token",
+    "data": {
+      "type": "token",
+      "content": "年假为",
+      "ts": 1785572951.4824805
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "5天，工作满三年后",
+      "step": 1,
+      "agent": "知识库问答助手",
+      "ts": 1785572951.5524354
+    }
+  },
+  {
+    "type": "token",
+    "data": {
+      "type": "token",
+      "content": "5天，工作满三年后",
+      "ts": 1785572951.5524423
+    }
+  },
+  {
+    "type": "thinking_token",
+    "data": {
+      "type": "thinking_token",
+      "content": "增至10天。",
+      "step": 1,
+      "agent": "知识库问答助手",
+      "ts": 1785572951.6276803
+    }
+  },
+  {
+    "type": "token",
+    "data": {
+      "type": "token",
+      "content": "增至10天。",
+      "ts": 1785572951.6276867
+    }
+  },
+  {
+    "type": "final_answer",
+    "data": {
+      "type": "final_answer",
+      "content": "公司年假为5天，工作满三年后增至10天。",
+      "ts": 1785572951.7125401
+    }
+  },
+  {
+    "type": "done",
+    "data": {
+      "type": "done",
+      "content": "",
+      "ts": 1785572951.7130826
+    }
+  }
+]

@@ -1,0 +1,2400 @@
+{
+  "meta": {
+    "date": "2026-08-02 11:34:16",
+    "base_url": "http://localhost:8000",
+    "crew": "knowledge_qa",
+    "crew_id": 2,
+    "n_queries": 28,
+    "n_chat": 12
+  },
+  "test_set": {
+    "meta": {
+      "description": "Nexus RAG 知识库量化评估测试集（2026-08-02）",
+      "corpus_note": "语料为项目真实文档（architecture.md / tool-guide.md / 进度.md / 设计文档.txt）",
+      "metric_definitions": {
+        "recall": "Recall@k = |检索命中的黄金分块 ∩ 真实黄金分块| / 真实黄金分块数",
+        "precision": "Precision@k = |检索命中的黄金分块 ∩ 真实黄金分块| / k",
+        "mrr": "MRR = 首个黄金分块排名的倒数",
+        "ndcg": "NDCG@k（二进制相关性，黄金分块=1）"
+      }
+    },
+    "corpus": [
+      {
+        "file": "doc/architecture.md",
+        "name": "Nexus架构白皮书",
+        "source_type": "text"
+      },
+      {
+        "file": "doc/tool-guide.md",
+        "name": "Nexus工具开发指南",
+        "source_type": "text"
+      },
+      {
+        "file": "doc/进度.md",
+        "name": "Nexus项目进度文档",
+        "source_type": "text"
+      },
+      {
+        "file": "doc/设计文档.txt",
+        "name": "Nexus设计文档",
+        "source_type": "text"
+      }
+    ],
+    "queries": [
+      {
+        "id": "q01",
+        "query": "Nexus 平台的数据库技术选型是什么？",
+        "golden_phrase": "PostgreSQL 16 + pgvector",
+        "expected_answer": "Nexus 平台的数据库采用 PostgreSQL 16 加 pgvector，用于业务配置与向量检索（RAG）。",
+        "source_doc": "Nexus架构白皮书",
+        "run_chat": true
+      },
+      {
+        "id": "q02",
+        "query": "Nexus 前端使用的框架组合是什么？",
+        "golden_phrase": "Next.js 14 + Tailwind + Shadcn UI",
+        "expected_answer": "Nexus 前端使用 Next.js 14、Tailwind CSS 和 Shadcn UI，三栏式 AppShell，SSE 流式渲染。",
+        "source_doc": "Nexus架构白皮书",
+        "run_chat": true
+      },
+      {
+        "id": "q03",
+        "query": "项目使用的是哪个版本的 CrewAI？",
+        "golden_phrase": "CrewAI 1.9.3",
+        "expected_answer": "项目使用的是 CrewAI 1.9.3。",
+        "source_doc": "Nexus架构白皮书",
+        "run_chat": true
+      },
+      {
+        "id": "q04",
+        "query": "Nexus 平台的核心目标是什么？",
+        "golden_phrase": "将 CLI 设计的 CrewAI 框架移植到 Web 环境",
+        "expected_answer": "Nexus 的核心目标是将 CLI 设计的 CrewAI 框架移植到 Web 环境。",
+        "source_doc": "Nexus架构白皮书",
+        "run_chat": true
+      },
+      {
+        "id": "q05",
+        "query": "HITL 审批单在 Redis 中的过期时间是多少？",
+        "golden_phrase": "TTL=300s",
+        "expected_answer": "HITL 审批单在 Redis 中的 TTL 为 300 秒（5 分钟兜底）。",
+        "source_doc": "Nexus架构白皮书",
+        "run_chat": false
+      },
+      {
+        "id": "q06",
+        "query": "工具内部访问数据库和 Redis 应使用什么类型的客户端？",
+        "golden_phrase": "同步 SQLAlchemy engine (psycopg2) 和同步 redis.Redis",
+        "expected_answer": "工具内部访问数据库应使用同步 SQLAlchemy engine（psycopg2），访问 Redis 应使用同步 redis.Redis，因为 CrewAI akickoff 在主事件循环中调用工具 _run，asyncio.run() 会报错。",
+        "source_doc": "Nexus架构白皮书",
+        "run_chat": true
+      },
+      {
+        "id": "q07",
+        "query": "CrewAI hierarchical 模式下 manager_agent 有什么限制？",
+        "golden_phrase": "manager_agent 仅负责拆解和委派，不能直接调用工具",
+        "expected_answer": "manager_agent 仅负责拆解和委派，不能直接调用工具。",
+        "source_doc": "Nexus架构白皮书",
+        "run_chat": true
+      },
+      {
+        "id": "q08",
+        "query": "Crew 的构建采用什么生命周期设计以实现配置热更新？",
+        "golden_phrase": "每次调用从 DB 重新装配 Crew，执行完丢弃",
+        "expected_answer": "每次调用 build_crew_from_db 从 DB 重新装配 Crew，执行完丢弃，从而实现配置热更新。",
+        "source_doc": "Nexus架构白皮书",
+        "run_chat": true
+      },
+      {
+        "id": "q09",
+        "query": "Nexus 的 SSE 是用什么类实现的？为什么不用 sse-starlette？",
+        "golden_phrase": "SSE 用 StreamingResponse 而非 sse-starlette",
+        "expected_answer": "Nexus 的 SSE 使用 StreamingResponse 实现，因为 sse-starlette 对 dict 输入有双重包装 bug。",
+        "source_doc": "Nexus架构白皮书",
+        "run_chat": false
+      },
+      {
+        "id": "q10",
+        "query": "Nexus 使用的缓存中间件是什么？",
+        "golden_phrase": "Redis 7",
+        "expected_answer": "Nexus 的缓存中间件是 Redis 7，用于 HITL 状态机与对话历史。",
+        "source_doc": "Nexus架构白皮书",
+        "run_chat": false
+      },
+      {
+        "id": "q11",
+        "query": "开发自定义工具需要继承 CrewAI 的哪个抽象类？",
+        "golden_phrase": "Nexus 平台的工具体系基于 CrewAI",
+        "expected_answer": "Nexus 平台的工具体系基于 CrewAI 的 BaseTool 抽象，每个工具是 Pydantic model 子类。",
+        "source_doc": "Nexus工具开发指南",
+        "run_chat": false
+      },
+      {
+        "id": "q12",
+        "query": "工具的参数化配置存储在哪个字段？",
+        "golden_phrase": "字段存储工具的持久化配置",
+        "expected_answer": "工具参数化配置存储在 ToolConfig 表的 config_json 字段。",
+        "source_doc": "Nexus工具开发指南",
+        "run_chat": false
+      },
+      {
+        "id": "q13",
+        "query": "HITL 工具审批超时多久会自动拒绝？",
+        "golden_phrase": "超时 150s 自动拒绝",
+        "expected_answer": "HITL 工具审批超时 150 秒会自动拒绝。",
+        "source_doc": "Nexus工具开发指南",
+        "run_chat": false
+      },
+      {
+        "id": "q14",
+        "query": "rag_search 工具的主要用途是什么？",
+        "golden_phrase": "pgvector 知识库检索",
+        "expected_answer": "rag_search 工具用于在已上传的私有知识库中做语义检索，即 pgvector 知识库检索。",
+        "source_doc": "Nexus工具开发指南",
+        "run_chat": true
+      },
+      {
+        "id": "q15",
+        "query": "知识库文档切块时，超过多少字会硬性切分？",
+        "golden_phrase": "500 字硬切",
+        "expected_answer": "知识库文档切块时，超过 500 字会硬性切分。",
+        "source_doc": "Nexus项目进度文档",
+        "run_chat": false
+      },
+      {
+        "id": "q16",
+        "query": "知识库的向量索引使用什么类型？参数是多少？",
+        "golden_phrase": "ivfflat lists=100",
+        "expected_answer": "知识库的向量索引使用 ivfflat，lists=100，适合中小规模语料。",
+        "source_doc": "Nexus项目进度文档",
+        "run_chat": false
+      },
+      {
+        "id": "q17",
+        "query": "Week 5 的 HITL 审批单在 Redis 中的 key 格式是什么？",
+        "golden_phrase": "approval:{approval_id}",
+        "expected_answer": "HITL 审批单在 Redis 中的 key 格式为 approval:{approval_id}，TTL 为 300 秒。",
+        "source_doc": "Nexus项目进度文档",
+        "run_chat": false
+      },
+      {
+        "id": "q18",
+        "query": "hierarchical 模式下 manager_agent 必须设置什么参数才能委派任务？",
+        "golden_phrase": "allow_delegation=True",
+        "expected_answer": "manager_agent 必须设置 allow_delegation=True 才能委派任务给子 agent。",
+        "source_doc": "Nexus项目进度文档",
+        "run_chat": true
+      },
+      {
+        "id": "q19",
+        "query": "Week 10 的 kb_ingest 工具批量嵌入时每批处理多少条输入？",
+        "golden_phrase": "单批 25 条",
+        "expected_answer": "Week 10 的 kb_ingest 工具调用 _embed_texts_sync 同步批量嵌入，单批处理 25 条。",
+        "source_doc": "Nexus项目进度文档",
+        "run_chat": false
+      },
+      {
+        "id": "q20",
+        "query": "RAG 使用的 embedding 模型名称是什么？",
+        "golden_phrase": "text-embedding-v3",
+        "expected_answer": "RAG 使用的 embedding 模型是 DashScope 的 text-embedding-v3，返回 1024 维向量。",
+        "source_doc": "Nexus项目进度文档",
+        "run_chat": false
+      },
+      {
+        "id": "q21",
+        "query": "知识库检索结果的相似度得分是如何计算的？",
+        "golden_phrase": "score = 1 - distance",
+        "expected_answer": "知识库检索的相似度得分 score = 1 - distance（cosine distance）。",
+        "source_doc": "Nexus项目进度文档",
+        "run_chat": false
+      },
+      {
+        "id": "q22",
+        "query": "测试中 agent 调用 rag_search 检索到的相似度是多少？",
+        "golden_phrase": "相似度0.796",
+        "expected_answer": "测试中 agent 调用 rag_search 检索到的相似度约为 0.796。",
+        "source_doc": "Nexus项目进度文档",
+        "run_chat": false
+      },
+      {
+        "id": "q23",
+        "query": "用于纯知识库问答对照测试的 Crew 叫什么？",
+        "golden_phrase": "knowledge_qa",
+        "expected_answer": "用于纯知识库问答对照测试的 Crew 是 knowledge_qa（单 Agent，仅挂 rag_search）。",
+        "source_doc": "Nexus项目进度文档",
+        "run_chat": true
+      },
+      {
+        "id": "q24",
+        "query": "Week 6 中 task 的 agent_id 为什么被改为可空？",
+        "golden_phrase": "`agent_id` 改 nullable",
+        "expected_answer": "Week 6 中 task 的 agent_id 改为可空，因为 hierarchical 模式下 task 可不绑 agent，由 manager 动态分配。",
+        "source_doc": "Nexus项目进度文档",
+        "run_chat": false
+      },
+      {
+        "id": "q25",
+        "query": "设计文档中前端的核心框架组合是什么？",
+        "golden_phrase": "Next.js (React) + Tailwind CSS + Shadcn UI + Vercel AI SDK",
+        "expected_answer": "设计文档中前端采用 Next.js (React) + Tailwind CSS + Shadcn UI + Vercel AI SDK。",
+        "source_doc": "Nexus设计文档",
+        "run_chat": false
+      },
+      {
+        "id": "q26",
+        "query": "设计文档中 HITL 人类审批的实现思路是什么？",
+        "golden_phrase": "Redis 状态机挂起",
+        "expected_answer": "设计文档中 HITL 的实现思路是 Redis 状态机挂起：自定义审批工具将审批单写入 Redis，前端通过 REST API 修改状态，工具检测到状态变更后返回。",
+        "source_doc": "Nexus设计文档",
+        "run_chat": true
+      },
+      {
+        "id": "q27",
+        "query": "设计文档提到未来引入什么技术解决跨文档关联推理？",
+        "golden_phrase": "GraphRAG (基于知识图谱的 RAG)",
+        "expected_answer": "设计文档提到未来引入 GraphRAG（基于知识图谱的 RAG）解决跨文档关联推理问题。",
+        "source_doc": "Nexus设计文档",
+        "run_chat": false
+      },
+      {
+        "id": "q28",
+        "query": "MVP 阶段面对 CrewAI 框架限制应如何应对？",
+        "golden_phrase": "MVP 阶段严禁陷入 CrewAI 底层源码的修改",
+        "expected_answer": "MVP 阶段严禁陷入 CrewAI 底层源码的修改，遇到框架限制优先通过外围包装（自定义工具、中间件）绕过。",
+        "source_doc": "Nexus设计文档",
+        "run_chat": true
+      }
+    ]
+  },
+  "ingestion": {
+    "docs": [
+      {
+        "name": "Nexus架构白皮书",
+        "file": "doc/architecture.md",
+        "chars": 4380,
+        "chunk_count": 40,
+        "ingest_seconds": 1.361,
+        "chunk_match": "OK",
+        "doc_id": 46
+      },
+      {
+        "name": "Nexus工具开发指南",
+        "file": "doc/tool-guide.md",
+        "chars": 4868,
+        "chunk_count": 57,
+        "ingest_seconds": 2.193,
+        "chunk_match": "OK",
+        "doc_id": 47
+      },
+      {
+        "name": "Nexus项目进度文档",
+        "file": "doc/进度.md",
+        "chars": 36658,
+        "chunk_count": 167,
+        "ingest_seconds": 7.376,
+        "chunk_match": "OK",
+        "doc_id": 48
+      },
+      {
+        "name": "Nexus设计文档",
+        "file": "doc/设计文档.txt",
+        "chars": 6605,
+        "chunk_count": 16,
+        "ingest_seconds": 0.894,
+        "chunk_match": "OK",
+        "doc_id": 49
+      }
+    ],
+    "created_doc_ids": [
+      46,
+      47,
+      48,
+      49
+    ]
+  },
+  "retrieval": {
+    "per_query": [
+      {
+        "id": "q01",
+        "query": "Nexus 平台的数据库技术选型是什么？",
+        "source_doc": "Nexus架构白皮书",
+        "n_golden": 1,
+        "golden_positions": [
+          8
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            0
+          ],
+          [
+            "Nexus架构白皮书",
+            4
+          ],
+          [
+            "Nexus项目进度文档",
+            142
+          ],
+          [
+            "Nexus工具开发指南",
+            4
+          ],
+          [
+            "Nexus架构白皮书",
+            1
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus架构白皮书",
+          "Nexus项目进度文档",
+          "Nexus工具开发指南",
+          "Nexus架构白皮书"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.2739,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 1.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.1,
+        "mrr@10": 0.16666666666666666,
+        "ndcg@10": 0.3562071871080222,
+        "hit_positions": [
+          5
+        ]
+      },
+      {
+        "id": "q02",
+        "query": "Nexus 前端使用的框架组合是什么？",
+        "source_doc": "Nexus架构白皮书",
+        "n_golden": 1,
+        "golden_positions": [
+          8
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            0
+          ],
+          [
+            "Nexus架构白皮书",
+            4
+          ],
+          [
+            "Nexus工具开发指南",
+            4
+          ],
+          [
+            "Nexus项目进度文档",
+            142
+          ],
+          [
+            "Nexus架构白皮书",
+            1
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus架构白皮书",
+          "Nexus工具开发指南",
+          "Nexus项目进度文档",
+          "Nexus架构白皮书"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.1563,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 1.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.1,
+        "mrr@10": 0.125,
+        "ndcg@10": 0.31546487678572877,
+        "hit_positions": [
+          7
+        ]
+      },
+      {
+        "id": "q03",
+        "query": "项目使用的是哪个版本的 CrewAI？",
+        "source_doc": "Nexus架构白皮书",
+        "n_golden": 1,
+        "golden_positions": [
+          8
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus工具开发指南",
+            0
+          ],
+          [
+            "Nexus工具开发指南",
+            1
+          ],
+          [
+            "Nexus设计文档",
+            0
+          ],
+          [
+            "Nexus设计文档",
+            5
+          ],
+          [
+            "Nexus设计文档",
+            2
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus工具开发指南",
+          "Nexus工具开发指南",
+          "Nexus设计文档",
+          "Nexus设计文档",
+          "Nexus设计文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.1408,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.0,
+        "mrr@10": 0.0,
+        "ndcg@10": 0.0,
+        "hit_positions": []
+      },
+      {
+        "id": "q04",
+        "query": "Nexus 平台的核心目标是什么？",
+        "source_doc": "Nexus架构白皮书",
+        "n_golden": 1,
+        "golden_positions": [
+          4
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            4
+          ],
+          [
+            "Nexus架构白皮书",
+            0
+          ],
+          [
+            "Nexus工具开发指南",
+            4
+          ],
+          [
+            "Nexus架构白皮书",
+            1
+          ],
+          [
+            "Nexus项目进度文档",
+            142
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus架构白皮书",
+          "Nexus工具开发指南",
+          "Nexus架构白皮书",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0328,
+        "top1_is_golden": true,
+        "retrieval_latency_s": 0.2844,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.3333333333333333,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 1.0,
+        "ndcg@10": 1.0,
+        "hit_positions": [
+          0
+        ]
+      },
+      {
+        "id": "q05",
+        "query": "HITL 审批单在 Redis 中的过期时间是多少？",
+        "source_doc": "Nexus架构白皮书",
+        "n_golden": 1,
+        "golden_positions": [
+          18
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            17
+          ],
+          [
+            "Nexus架构白皮书",
+            26
+          ],
+          [
+            "Nexus项目进度文档",
+            76
+          ],
+          [
+            "Nexus工具开发指南",
+            45
+          ],
+          [
+            "Nexus架构白皮书",
+            18
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus架构白皮书",
+          "Nexus项目进度文档",
+          "Nexus工具开发指南",
+          "Nexus架构白皮书"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.1375,
+        "recall@3": 0.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.0,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 0.2,
+        "ndcg@10": 0.38685280723454163,
+        "hit_positions": [
+          4
+        ]
+      },
+      {
+        "id": "q06",
+        "query": "工具内部访问数据库和 Redis 应使用什么类型的客户端？",
+        "source_doc": "Nexus架构白皮书",
+        "n_golden": 1,
+        "golden_positions": [
+          25
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            25
+          ],
+          [
+            "Nexus工具开发指南",
+            32
+          ],
+          [
+            "Nexus项目进度文档",
+            67
+          ],
+          [
+            "Nexus项目进度文档",
+            79
+          ],
+          [
+            "Nexus工具开发指南",
+            45
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus工具开发指南",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus工具开发指南"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": true,
+        "retrieval_latency_s": 0.1483,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.3333333333333333,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 1.0,
+        "ndcg@10": 1.0,
+        "hit_positions": [
+          0
+        ]
+      },
+      {
+        "id": "q07",
+        "query": "CrewAI hierarchical 模式下 manager_agent 有什么限制？",
+        "source_doc": "Nexus架构白皮书",
+        "n_golden": 1,
+        "golden_positions": [
+          29
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            29
+          ],
+          [
+            "Nexus项目进度文档",
+            85
+          ],
+          [
+            "Nexus项目进度文档",
+            105
+          ],
+          [
+            "Nexus项目进度文档",
+            94
+          ],
+          [
+            "Nexus项目进度文档",
+            106
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": true,
+        "retrieval_latency_s": 0.2767,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.3333333333333333,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 1.0,
+        "ndcg@10": 1.0,
+        "hit_positions": [
+          0
+        ]
+      },
+      {
+        "id": "q08",
+        "query": "Crew 的构建采用什么生命周期设计以实现配置热更新？",
+        "source_doc": "Nexus架构白皮书",
+        "n_golden": 1,
+        "golden_positions": [
+          23
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            23
+          ],
+          [
+            "Nexus项目进度文档",
+            92
+          ],
+          [
+            "Nexus设计文档",
+            2
+          ],
+          [
+            "Nexus工具开发指南",
+            0
+          ],
+          [
+            "Nexus项目进度文档",
+            145
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus项目进度文档",
+          "Nexus设计文档",
+          "Nexus工具开发指南",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": true,
+        "retrieval_latency_s": 0.2761,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.3333333333333333,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 1.0,
+        "ndcg@10": 1.0,
+        "hit_positions": [
+          0
+        ]
+      },
+      {
+        "id": "q09",
+        "query": "Nexus 的 SSE 是用什么类实现的？为什么不用 sse-starlette？",
+        "source_doc": "Nexus架构白皮书",
+        "n_golden": 1,
+        "golden_positions": [
+          24
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            24
+          ],
+          [
+            "Nexus架构白皮书",
+            0
+          ],
+          [
+            "Nexus架构白皮书",
+            4
+          ],
+          [
+            "Nexus项目进度文档",
+            103
+          ],
+          [
+            "Nexus工具开发指南",
+            36
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus架构白皮书",
+          "Nexus架构白皮书",
+          "Nexus项目进度文档",
+          "Nexus工具开发指南"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": true,
+        "retrieval_latency_s": 0.3083,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.3333333333333333,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 1.0,
+        "ndcg@10": 1.0,
+        "hit_positions": [
+          0
+        ]
+      },
+      {
+        "id": "q10",
+        "query": "Nexus 使用的缓存中间件是什么？",
+        "source_doc": "Nexus架构白皮书",
+        "n_golden": 1,
+        "golden_positions": [
+          8
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            0
+          ],
+          [
+            "Nexus架构白皮书",
+            4
+          ],
+          [
+            "Nexus工具开发指南",
+            4
+          ],
+          [
+            "Nexus项目进度文档",
+            142
+          ],
+          [
+            "Nexus架构白皮书",
+            1
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus架构白皮书",
+          "Nexus工具开发指南",
+          "Nexus项目进度文档",
+          "Nexus架构白皮书"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.1408,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.0,
+        "mrr@10": 0.0,
+        "ndcg@10": 0.0,
+        "hit_positions": []
+      },
+      {
+        "id": "q11",
+        "query": "开发自定义工具需要继承 CrewAI 的哪个抽象类？",
+        "source_doc": "Nexus工具开发指南",
+        "n_golden": 1,
+        "golden_positions": [
+          4
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus工具开发指南",
+            0
+          ],
+          [
+            "Nexus工具开发指南",
+            1
+          ],
+          [
+            "Nexus设计文档",
+            7
+          ],
+          [
+            "Nexus工具开发指南",
+            4
+          ],
+          [
+            "Nexus设计文档",
+            10
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus工具开发指南",
+          "Nexus工具开发指南",
+          "Nexus设计文档",
+          "Nexus工具开发指南",
+          "Nexus设计文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.1528,
+        "recall@3": 0.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.0,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 0.25,
+        "ndcg@10": 0.43067655807339306,
+        "hit_positions": [
+          3
+        ]
+      },
+      {
+        "id": "q12",
+        "query": "工具的参数化配置存储在哪个字段？",
+        "source_doc": "Nexus工具开发指南",
+        "n_golden": 1,
+        "golden_positions": [
+          19
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus工具开发指南",
+            18
+          ],
+          [
+            "Nexus项目进度文档",
+            118
+          ],
+          [
+            "Nexus工具开发指南",
+            19
+          ],
+          [
+            "LangGraph 快速入门教程",
+            12
+          ],
+          [
+            "Nexus项目进度文档",
+            109
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus工具开发指南",
+          "Nexus项目进度文档",
+          "Nexus工具开发指南",
+          "LangGraph 快速入门教程",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.2989,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.3333333333333333,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 0.3333333333333333,
+        "ndcg@10": 0.5,
+        "hit_positions": [
+          2
+        ]
+      },
+      {
+        "id": "q13",
+        "query": "HITL 工具审批超时多久会自动拒绝？",
+        "source_doc": "Nexus工具开发指南",
+        "n_golden": 1,
+        "golden_positions": [
+          45
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            17
+          ],
+          [
+            "Nexus项目进度文档",
+            154
+          ],
+          [
+            "Nexus架构白皮书",
+            26
+          ],
+          [
+            "Nexus工具开发指南",
+            45
+          ],
+          [
+            "Nexus工具开发指南",
+            42
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus项目进度文档",
+          "Nexus架构白皮书",
+          "Nexus工具开发指南",
+          "Nexus工具开发指南"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.2484,
+        "recall@3": 0.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.0,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 0.25,
+        "ndcg@10": 0.43067655807339306,
+        "hit_positions": [
+          3
+        ]
+      },
+      {
+        "id": "q14",
+        "query": "rag_search 工具的主要用途是什么？",
+        "source_doc": "Nexus工具开发指南",
+        "n_golden": 1,
+        "golden_positions": [
+          53
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus工具开发指南",
+            22
+          ],
+          [
+            "Nexus项目进度文档",
+            54
+          ],
+          [
+            "Nexus项目进度文档",
+            55
+          ],
+          [
+            "Nexus工具开发指南",
+            53
+          ],
+          [
+            "Nexus项目进度文档",
+            121
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus工具开发指南",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus工具开发指南",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.2796,
+        "recall@3": 0.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.0,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 0.25,
+        "ndcg@10": 0.43067655807339306,
+        "hit_positions": [
+          3
+        ]
+      },
+      {
+        "id": "q15",
+        "query": "知识库文档切块时，超过多少字会硬性切分？",
+        "source_doc": "Nexus项目进度文档",
+        "n_golden": 2,
+        "golden_positions": [
+          52,
+          61
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus项目进度文档",
+            56
+          ],
+          [
+            "Nexus项目进度文档",
+            146
+          ],
+          [
+            "Nexus工具开发指南",
+            42
+          ],
+          [
+            "Nexus项目进度文档",
+            150
+          ],
+          [
+            "Nexus项目进度文档",
+            141
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus工具开发指南",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.1408,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 0.5,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.1,
+        "mrr@10": 0.1111111111111111,
+        "ndcg@10": 0.3010299956639812,
+        "hit_positions": [
+          8
+        ]
+      },
+      {
+        "id": "q16",
+        "query": "知识库的向量索引使用什么类型？参数是多少？",
+        "source_doc": "Nexus项目进度文档",
+        "n_golden": 1,
+        "golden_positions": [
+          61
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus工具开发指南",
+            53
+          ],
+          [
+            "Nexus项目进度文档",
+            121
+          ],
+          [
+            "Nexus项目进度文档",
+            56
+          ],
+          [
+            "Nexus项目进度文档",
+            128
+          ],
+          [
+            "Nexus工具开发指南",
+            18
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus工具开发指南",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus工具开发指南"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.294,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 1.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.1,
+        "mrr@10": 0.125,
+        "ndcg@10": 0.31546487678572877,
+        "hit_positions": [
+          7
+        ]
+      },
+      {
+        "id": "q17",
+        "query": "Week 5 的 HITL 审批单在 Redis 中的 key 格式是什么？",
+        "source_doc": "Nexus项目进度文档",
+        "n_golden": 1,
+        "golden_positions": [
+          67
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            17
+          ],
+          [
+            "Nexus项目进度文档",
+            75
+          ],
+          [
+            "Nexus项目进度文档",
+            64
+          ],
+          [
+            "Nexus架构白皮书",
+            26
+          ],
+          [
+            "Nexus设计文档",
+            6
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus架构白皮书",
+          "Nexus设计文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.129,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.0,
+        "mrr@10": 0.0,
+        "ndcg@10": 0.0,
+        "hit_positions": []
+      },
+      {
+        "id": "q18",
+        "query": "hierarchical 模式下 manager_agent 必须设置什么参数才能委派任务？",
+        "source_doc": "Nexus项目进度文档",
+        "n_golden": 3,
+        "golden_positions": [
+          86,
+          93,
+          106
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            29
+          ],
+          [
+            "Nexus项目进度文档",
+            89
+          ],
+          [
+            "Nexus项目进度文档",
+            94
+          ],
+          [
+            "Nexus项目进度文档",
+            85
+          ],
+          [
+            "Nexus项目进度文档",
+            105
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.2815,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 0.6666666666666666,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.2,
+        "mrr@10": 0.16666666666666666,
+        "ndcg@10": 0.41183384043543503,
+        "hit_positions": [
+          5,
+          7
+        ]
+      },
+      {
+        "id": "q19",
+        "query": "Week 10 的 kb_ingest 工具批量嵌入时每批处理多少条输入？",
+        "source_doc": "Nexus项目进度文档",
+        "n_golden": 1,
+        "golden_positions": [
+          153
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus项目进度文档",
+            158
+          ],
+          [
+            "Nexus项目进度文档",
+            131
+          ],
+          [
+            "Nexus项目进度文档",
+            147
+          ],
+          [
+            "Nexus项目进度文档",
+            155
+          ],
+          [
+            "Nexus项目进度文档",
+            151
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.2987,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.0,
+        "mrr@10": 0.0,
+        "ndcg@10": 0.0,
+        "hit_positions": []
+      },
+      {
+        "id": "q20",
+        "query": "RAG 使用的 embedding 模型名称是什么？",
+        "source_doc": "Nexus项目进度文档",
+        "n_golden": 4,
+        "golden_positions": [
+          49,
+          51,
+          58,
+          60
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus项目进度文档",
+            60
+          ],
+          [
+            "Nexus项目进度文档",
+            48
+          ],
+          [
+            "Nexus项目进度文档",
+            58
+          ],
+          [
+            "Nexus项目进度文档",
+            147
+          ],
+          [
+            "Nexus设计文档",
+            12
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus设计文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": true,
+        "retrieval_latency_s": 0.1694,
+        "recall@3": 0.5,
+        "recall@5": 0.5,
+        "recall@10": 0.5,
+        "precision@3": 0.6666666666666666,
+        "precision@5": 0.4,
+        "precision@10": 0.2,
+        "mrr@10": 1.0,
+        "ndcg@10": 0.9197207891481876,
+        "hit_positions": [
+          0,
+          2
+        ]
+      },
+      {
+        "id": "q21",
+        "query": "知识库检索结果的相似度得分是如何计算的？",
+        "source_doc": "Nexus项目进度文档",
+        "n_golden": 2,
+        "golden_positions": [
+          52,
+          61
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus项目进度文档",
+            97
+          ],
+          [
+            "Nexus工具开发指南",
+            53
+          ],
+          [
+            "Nexus项目进度文档",
+            121
+          ],
+          [
+            "Nexus项目进度文档",
+            61
+          ],
+          [
+            "Nexus项目进度文档",
+            11
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus项目进度文档",
+          "Nexus工具开发指南",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.2482,
+        "recall@3": 0.0,
+        "recall@5": 0.5,
+        "recall@10": 0.5,
+        "precision@3": 0.0,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 0.25,
+        "ndcg@10": 0.43067655807339306,
+        "hit_positions": [
+          3
+        ]
+      },
+      {
+        "id": "q22",
+        "query": "测试中 agent 调用 rag_search 检索到的相似度是多少？",
+        "source_doc": "Nexus项目进度文档",
+        "n_golden": 1,
+        "golden_positions": [
+          58
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus项目进度文档",
+            55
+          ],
+          [
+            "Nexus项目进度文档",
+            61
+          ],
+          [
+            "Nexus项目进度文档",
+            54
+          ],
+          [
+            "Nexus项目进度文档",
+            48
+          ],
+          [
+            "Nexus工具开发指南",
+            22
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus工具开发指南"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.1574,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 1.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.1,
+        "mrr@10": 0.14285714285714285,
+        "ndcg@10": 0.3333333333333333,
+        "hit_positions": [
+          6
+        ]
+      },
+      {
+        "id": "q23",
+        "query": "用于纯知识库问答对照测试的 Crew 叫什么？",
+        "source_doc": "Nexus项目进度文档",
+        "n_golden": 2,
+        "golden_positions": [
+          55,
+          61
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus项目进度文档",
+            146
+          ],
+          [
+            "Nexus项目进度文档",
+            145
+          ],
+          [
+            "Nexus工具开发指南",
+            0
+          ],
+          [
+            "Nexus项目进度文档",
+            102
+          ],
+          [
+            "Nexus架构白皮书",
+            16
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus工具开发指南",
+          "Nexus项目进度文档",
+          "Nexus架构白皮书"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.2773,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.0,
+        "mrr@10": 0.0,
+        "ndcg@10": 0.0,
+        "hit_positions": []
+      },
+      {
+        "id": "q24",
+        "query": "Week 6 中 task 的 agent_id 为什么被改为可空？",
+        "source_doc": "Nexus项目进度文档",
+        "n_golden": 1,
+        "golden_positions": [
+          105
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus项目进度文档",
+            83
+          ],
+          [
+            "Nexus项目进度文档",
+            89
+          ],
+          [
+            "Nexus项目进度文档",
+            101
+          ],
+          [
+            "Nexus项目进度文档",
+            73
+          ],
+          [
+            "Nexus项目进度文档",
+            4
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 1.7869,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.0,
+        "mrr@10": 0.0,
+        "ndcg@10": 0.0,
+        "hit_positions": []
+      },
+      {
+        "id": "q25",
+        "query": "设计文档中前端的核心框架组合是什么？",
+        "source_doc": "Nexus设计文档",
+        "n_golden": 1,
+        "golden_positions": [
+          0
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus项目进度文档",
+            8
+          ],
+          [
+            "Nexus项目进度文档",
+            98
+          ],
+          [
+            "Nexus项目进度文档",
+            142
+          ],
+          [
+            "Nexus设计文档",
+            13
+          ],
+          [
+            "Nexus项目进度文档",
+            6
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus项目进度文档",
+          "Nexus设计文档",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.1342,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.0,
+        "mrr@10": 0.0,
+        "ndcg@10": 0.0,
+        "hit_positions": []
+      },
+      {
+        "id": "q26",
+        "query": "设计文档中 HITL 人类审批的实现思路是什么？",
+        "source_doc": "Nexus设计文档",
+        "n_golden": 1,
+        "golden_positions": [
+          1
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus架构白皮书",
+            17
+          ],
+          [
+            "Nexus项目进度文档",
+            154
+          ],
+          [
+            "Nexus架构白皮书",
+            26
+          ],
+          [
+            "Nexus工具开发指南",
+            42
+          ],
+          [
+            "Nexus项目进度文档",
+            63
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus架构白皮书",
+          "Nexus项目进度文档",
+          "Nexus架构白皮书",
+          "Nexus工具开发指南",
+          "Nexus项目进度文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.1991,
+        "recall@3": 0.0,
+        "recall@5": 0.0,
+        "recall@10": 0.0,
+        "precision@3": 0.0,
+        "precision@5": 0.0,
+        "precision@10": 0.0,
+        "mrr@10": 0.0,
+        "ndcg@10": 0.0,
+        "hit_positions": []
+      },
+      {
+        "id": "q27",
+        "query": "设计文档提到未来引入什么技术解决跨文档关联推理？",
+        "source_doc": "Nexus设计文档",
+        "n_golden": 1,
+        "golden_positions": [
+          12
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus设计文档",
+            12
+          ],
+          [
+            "Nexus项目进度文档",
+            20
+          ],
+          [
+            "Nexus设计文档",
+            10
+          ],
+          [
+            "LangGraph 快速入门教程",
+            127
+          ],
+          [
+            "Nexus设计文档",
+            14
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus设计文档",
+          "Nexus项目进度文档",
+          "Nexus设计文档",
+          "LangGraph 快速入门教程",
+          "Nexus设计文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": true,
+        "retrieval_latency_s": 0.2539,
+        "recall@3": 1.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.3333333333333333,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 1.0,
+        "ndcg@10": 1.0,
+        "hit_positions": [
+          0
+        ]
+      },
+      {
+        "id": "q28",
+        "query": "MVP 阶段面对 CrewAI 框架限制应如何应对？",
+        "source_doc": "Nexus设计文档",
+        "n_golden": 1,
+        "golden_positions": [
+          4
+        ],
+        "retrieved_positions": [
+          [
+            "Nexus设计文档",
+            10
+          ],
+          [
+            "Nexus工具开发指南",
+            0
+          ],
+          [
+            "Nexus设计文档",
+            0
+          ],
+          [
+            "Nexus设计文档",
+            1
+          ],
+          [
+            "Nexus设计文档",
+            4
+          ]
+        ],
+        "retrieved_docs": [
+          "Nexus设计文档",
+          "Nexus工具开发指南",
+          "Nexus设计文档",
+          "Nexus设计文档",
+          "Nexus设计文档"
+        ],
+        "top1_score": 0.0164,
+        "top1_is_golden": false,
+        "retrieval_latency_s": 0.1645,
+        "recall@3": 0.0,
+        "recall@5": 1.0,
+        "recall@10": 1.0,
+        "precision@3": 0.0,
+        "precision@5": 0.2,
+        "precision@10": 0.1,
+        "mrr@10": 0.2,
+        "ndcg@10": 0.38685280723454163,
+        "hit_positions": [
+          4
+        ]
+      }
+    ],
+    "aggregate": {
+      "recall@3": 0.26785714285714285,
+      "recall@5": 0.4642857142857143,
+      "recall@10": 0.6488095238095238,
+      "precision@3": 0.10714285714285714,
+      "precision@5": 0.10714285714285715,
+      "precision@10": 0.07857142857142857,
+      "mrr@10": 0.3418083900226757,
+      "ndcg@10": 0.42676666950082404,
+      "top1_golden_rate": 0.25,
+      "latency_s": {
+        "p50_ms": 248.3,
+        "p90_ms": 298.7,
+        "max_ms": 1786.9,
+        "n": 28
+      },
+      "n_queries": 28
+    }
+  },
+  "generation": {
+    "per_query": [
+      {
+        "id": "q01",
+        "query": "Nexus 平台的数据库技术选型是什么？",
+        "e2e_seconds": 2.7,
+        "first_event_seconds": 0.25,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus架构白皮书] (相似度=0.016)\n  内容: # Nexus 架构白皮书\n\n结果2: [Nexus项目进度文档] (相似度=0.016)\n  内容: | 文件 | 内容 |\n|---|---|\n| `doc/architecture.md` | Nexus 架构白皮书：分层架构、核心数据流、技术选型决策、数据模型、已知限制 |\n| `doc/tool-guide.md` | 自定义 Tool 开发指南：BaseTool 继承、tool_registry 注册、config_json 参数化、同步 DB/Redis 踩坑、事件包装、H",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "知识库中未提及 Nexus 平台的数据库技术选型。",
+        "judge_relevance": 1.0,
+        "judge_relevance_reason": "回答直接、准确地回应了用户关于Nexus平台数据库技术选型的问题，明确指出知识库中无相关信息，既未猜测也未提供错误信息，符合事实性与严谨性要求，完全切题。",
+        "judge_faithfulness": 1.0,
+        "judge_faithfulness_reason": "回答‘知识库中未提及 Nexus 平台的数据库技术选型’完全符合上下文：[1]–[5] 中所有片段均未出现任何数据库技术名称（如 PostgreSQL、MySQL、MongoDB、SQLite 等）或相关技术选型描述；[3] 提到 doc/architecture.md 包含‘技术选型决策’，但未给出具体内容；[4] 提及‘同步 DB/Redis 踩坑’，其中‘DB’为泛称、‘Redis’属缓存而非主数据库，且该短语出自 tool-guide.md 的踩坑提示，未说明其是否为 Nexus 主数据库选型，亦未明确 DB 指代何种数据库系统——因此‘DB’和‘Redis’的出现不构成对‘数据库技术选型’的具体陈述，反而佐证了该信息未被明确披露。故该断言严谨、无过度推断，全部 supported。",
+        "judge_completeness": 0.0,
+        "judge_completeness_reason": "系统回答完全否认了知识库中存在相关信息（'未提及'），而标准答案明确给出了具体技术栈：PostgreSQL 16 和 pgvector，且说明了二者用途（业务配置与向量检索/RAG）。系统回答未覆盖任何关键信息点——既未确认技术选型，也未提及 PostgreSQL 16、pgvector、业务配置、向量检索或 RAG 等任一要素。"
+      },
+      {
+        "id": "q02",
+        "query": "Nexus 前端使用的框架组合是什么？",
+        "e2e_seconds": 2.23,
+        "first_event_seconds": 0.24,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus架构白皮书] (相似度=0.016)\n  内容: # Nexus 架构白皮书\n\n结果2: [Nexus架构白皮书] (相似度=0.016)\n  内容: Nexus 是一个基于 CrewAI 的多智能体 Web 平台，核心目标是**将 CLI 设计的 CrewAI 框架移植到 Web 环境**，实现：\n\n结果3: [Nexus工具开发指南] (相似度=0.016)\n  内容: Nexus 平台的工具体系基于 CrewAI 的 `BaseTool` 抽象。每个工具是一个 Pydantic model 子类，通过 `tool_registry",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "知识库中未提及 Nexus 前端使用的框架组合。",
+        "judge_relevance": 1.0,
+        "judge_relevance_reason": "回答直接针对问题，明确指出知识库中没有相关信息，符合事实且无冗余内容，属于准确、切题的回应。",
+        "judge_faithfulness": 1.0,
+        "judge_faithfulness_reason": "上下文片段[1]–[5]中均未提及Nexus前端使用的任何框架（如React、Vue、Next.js等）或技术栈组合；所有条目仅涉及后端/架构层面：CrewAI集成、BaseTool抽象、tool_registry、Pydantic模型、文档路径、分层架构、数据流等，但对前端实现技术完全未作说明。因此‘知识库中未提及 Nexus 前端使用的框架组合’这一断言被上下文充分支持，无 unsupported 断言。",
+        "judge_completeness": 0.0,
+        "judge_completeness_reason": "系统回答完全未提及标准答案中的任何关键信息点：Next.js 14、Tailwind CSS、Shadcn UI、三栏式 AppShell、SSE 流式渲染。它仅笼统声明‘知识库中未提及’，既未确认也未否定具体技术栈，更未覆盖架构特征（三栏式 AppShell）和核心能力（SSE 流式渲染），因此对标准答案零覆盖。"
+      },
+      {
+        "id": "q03",
+        "query": "项目使用的是哪个版本的 CrewAI？",
+        "e2e_seconds": 2.94,
+        "first_event_seconds": 0.38,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus工具开发指南] (相似度=0.016)\n  内容: # 自定义 CrewAI Tool 开发指南\n\n结果2: [Nexus工具开发指南] (相似度=0.016)\n  内容: > Project Nexus — 如何为 CrewAI 开发自定义工具\n> 版本 1.0 | 2026-07-12\n\n结果3: [Nexus设计文档] (相似度=0.016)\n  内容: 一、 技术方案与可行性评估\n1. 技术栈选型\n为了完美承载 CrewAI 并满足 Web 端的实时交互需求，采用 “Python 核心引擎 + TS 轻量控制前端” 的跨语言分离",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "知识库中未提及项目所使用的 CrewAI 具体版本。",
+        "judge_relevance": 1.0,
+        "judge_relevance_reason": "回答直接针对用户询问的‘项目使用的是哪个版本的 CrewAI’这一具体问题，明确指出‘知识库中未提及项目所使用的 CrewAI 具体版本’，信息准确、简洁、无歧义，完全切题且相关。",
+        "judge_faithfulness": 1.0,
+        "judge_faithfulness_reason": "上下文片段中确实未提及 CrewAI 的具体版本号。片段 [2] 提到文档标题为 'Project Nexus — 如何为 CrewAI 开发自定义工具'，版本号 '1.0 | 2026-07-12' 指的是该指南文档本身的版本，而非 CrewAI 库的版本；片段 [3][4][5] 均仅泛称 'CrewAI'，未出现类似 'CrewAI v0.82'、'CrewAI>=0.7.0' 等任何版本标识；所有技术栈描述（如 FastAPI、Next.js、pgvector）均未隐含或锚定 CrewAI 版本信息。因此，'知识库中未提及项目所使用的 CrewAI 具体版本' 这一断言完全被上下文支持，无 unsupported 断言。",
+        "judge_completeness": 0.0,
+        "judge_completeness_reason": "系统回答声称‘知识库中未提及项目所使用的 CrewAI 具体版本’，但标准答案明确指出‘项目使用的是 CrewAI 1.9.3’，这是一个确定的、具体的版本信息。系统回答完全否定了该信息的存在，既未确认也未提供该版本号，因此未覆盖标准答案中的任何关键信息点（即：CrewAI、版本号1.9.3、项目使用该版本这一事实）。"
+      },
+      {
+        "id": "q04",
+        "query": "Nexus 平台的核心目标是什么？",
+        "e2e_seconds": 3.19,
+        "first_event_seconds": 0.3,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus架构白皮书] (相似度=0.033)\n  内容: Nexus 是一个基于 CrewAI 的多智能体 Web 平台，核心目标是**将 CLI 设计的 CrewAI 框架移植到 Web 环境**，实现：\n\n结果2: [Nexus架构白皮书] (相似度=0.016)\n  内容: # Nexus 架构白皮书\n\n结果3: [Nexus工具开发指南] (相似度=0.016)\n  内容: Nexus 平台的工具体系基于 CrewAI 的 `BaseTool` 抽象。每个工具是一个 Pydantic model 子类，通过 `tool_registry",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "Nexus 平台的核心目标是**将 CLI 设计的 CrewAI 框架移植到 Web 环境**，实现。",
+        "judge_relevance": 0.3,
+        "judge_relevance_reason": "回答部分相关但不准确、不完整。Nexus 平台并非官方定义的 CrewAI 相关产品，目前（截至2024年）CrewAI 官方并未发布名为 'Nexus' 的平台；该名称可能源于社区项目、第三方工具或用户误解。回答将‘Nexus平台’武断定义为‘CLI版CrewAI移植到Web环境’，缺乏依据，且未说明其真实背景（如是否为实验性UI、第三方托管服务或概念验证），也未涵盖可能的其他核心目标（如协作、可视化编排、模型集成、权限管理等）。因此，回答存在事实性偏差，偏离问题本质，仅因提及CrewAI和Web环境而有微弱相关性。",
+        "judge_faithfulness": 1.0,
+        "judge_faithfulness_reason": "回答中的断言‘Nexus 平台的核心目标是将 CLI 设计的 CrewAI 框架移植到 Web 环境，实现。’完全匹配上下文片段[1]的原文：‘Nexus 是一个基于 CrewAI 的多智能体 Web 平台，核心目标是**将 CLI 设计的 CrewAI 框架移植到 Web 环境**，实现：’。该句为直接引用，标点、措辞（包括冒号结尾的未完成结构）均一致；上下文[4]和[2]进一步佐证了 Nexus 的正式名称（Project Nexus）、文档权威性（白皮书、技术架构文档）及 Web 平台定位；无任何部分存在曲解、添加或缺失。",
+        "judge_completeness": 1.0,
+        "judge_completeness_reason": "系统回答完整复现了标准答案的核心陈述：'Nexus 的核心目标是将 CLI 设计的 CrewAI 框架移植到 Web 环境'。虽末尾多出'实现。'二字，但该词为冗余补足语，未引入新信息或改变原意，亦未遗漏任何关键信息点（主体：Nexus；核心目标：移植；源形态：CLI 设计的 CrewAI 框架；目标环境：Web 环境）。所有关键要素均准确覆盖。"
+      },
+      {
+        "id": "q06",
+        "query": "工具内部访问数据库和 Redis 应使用什么类型的客户端？",
+        "e2e_seconds": 3.0,
+        "first_event_seconds": 0.39,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus架构白皮书] (相似度=0.016)\n  内容: ### 3. 工具内访问 DB/Redis 用同步客户端\nCrewAI `akickoff()` 在主事件循环中调用工具 `_run`，`asyncio.run()` 会报 \"Cannot run the event loop while another loop is running\"。所有工具内部使用同步 SQLAlchemy engine (psycopg2) 和同步 redis.Redis。\n\n结果2: [Nexus工具开发指南] (相似度=0.016)\n  内容: 同理，访问 ",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "工具内部访问数据库应使用同步 SQLAlchemy engine（如 psycopg2），访问 Redis 应使用同步 redis.Redis 客户端（非 redis.asyncio）。",
+        "judge_relevance": 1.0,
+        "judge_relevance_reason": "回答直接针对问题中‘工具内部访问数据库和 Redis 应使用什么类型的客户端’这一核心诉求，明确给出了技术选型建议：数据库用同步 SQLAlchemy engine（以 psycopg2 为例），Redis 用同步 redis.Redis 客户端，并特别排除了异步变体（redis.asyncio），理由隐含于‘工具内部’这一上下文——通常指常规服务端逻辑、非高并发 I/O 密集型任务，同步客户端更简单、稳定、兼容性好，符合工程实践惯例。回答简洁、准确、无歧义，完全切题。",
+        "judge_faithfulness": 1.0,
+        "judge_faithfulness_reason": "所有断言均被上下文明确支持：① '工具内部用同步 SQLAlchemy engine（如 psycopg2）' 被 [1] 直接陈述：'所有工具内部使用同步 SQLAlchemy engine (psycopg2)'；② '访问 Redis 应使用同步 redis.Redis 客户端（非 redis.asyncio）' 被 [1] '同步 redis.Redis'、[2] '必须用同步 redis.Redis（非 redis.asyncio）'、[3] '同步 Redis 客户端（redis-py 同步模式）'、[4] 'HITL 工具用同步 Redis 客户端' 多次明确支持；上下文一致强调原因——CrewAI akickoff() 在主事件循环中调用 _run，禁止嵌套 asyncio.run，故必须用同步客户端。无任何断言超出或违背上下文。",
+        "judge_completeness": 1.0,
+        "judge_completeness_reason": "系统回答准确传达了标准答案的全部关键信息点：1) 工具内部访问数据库应使用同步 SQLAlchemy engine（明确提及 psycopg2 作为典型驱动，符合‘如 psycopg2’的表述）；2) 访问 Redis 应使用同步 redis.Redis 客户端；3) 明确排除异步客户端（通过‘非 redis.asyncio’清晰对应标准答案中隐含的‘不能用异步’这一约束）。虽然标准答案补充了原因（CrewAI kickoff 在主事件循环中调用 _run，asyncio.run() 会报错），但该原因是解释性背景，非强制要求覆盖的‘关键信息点’——题目明确要求判断是否覆盖‘所有关键信息点’，而关键信息点是‘用什么（同步SQLAlchemy + psycopg2，同步redis.Redis）’，而非‘为什么’。系统回答完整、准确、无歧义地覆盖了所有操作性关键要求。"
+      },
+      {
+        "id": "q07",
+        "query": "CrewAI hierarchical 模式下 manager_agent 有什么限制？",
+        "e2e_seconds": 3.06,
+        "first_event_seconds": 0.27,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus架构白皮书] (相似度=0.016)\n  内容: ### 7. hierarchical 模式 — manager_agent 不能挂 tools\nCrewAI 限制：manager_agent 仅负责拆解和委派，不能直接调用工具。\n\n结果2: [Nexus项目进度文档] (相似度=0.016)\n  内容: #### 方案选择：CrewAI hierarchical + manager_agent\n\n结果3: [Nexus项目进度文档] (相似度=0.016)\n  内容: 1. **CrewAI hierarchical manager",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "CrewAI hierarchical 模式下，manager_agent 的限制是：仅负责拆解和委派任务，不能直接调用工具。",
+        "judge_relevance": 0.8,
+        "judge_relevance_reason": "回答基本切题，指出了manager_agent在hierarchical模式下的关键限制（不能直接调用工具，仅负责任务拆解与委派），这确实是CrewAI官方文档中明确强调的设计约束。但存在两点不足：1）未说明该限制的根源——manager_agent默认不配置tools且其role被设计为‘coordinator’而非‘executor’；2）未提及其他相关限制，如manager_agent不能作为task的executor、不参与最终结果生成、不支持LLM tool-calling等。尽管如此，核心信息准确且直接回应了用户关于‘限制’的询问，故评分0.8。",
+        "judge_faithfulness": 1.0,
+        "judge_faithfulness_reason": "回答中的断言'仅负责拆解和委派任务，不能直接调用工具'被上下文多处明确支持：[1] 直接陈述'manager_agent 不能挂 tools'且'仅负责拆解和委派，不能直接调用工具'；[3] 第1条重复强调'CrewAI 要求 manager_agent 仅负责拆解和委派，不能直接调用工具'，并指出 factory.py 中 manager 构造不传 tools= 参数、orchestrator 的 tools 设为 []；[6] 提到'manager agent 必须开启 delegation 才能委派任务给子 agent'，侧面印证其核心职责是委派而非执行（调用工具属于执行）；全文无任何信息表明 manager_agent 可调用工具或承担执行角色。",
+        "judge_completeness": 1.0,
+        "judge_completeness_reason": "系统回答准确、完整地覆盖了标准答案的所有关键信息点：明确指出 manager_agent 的角色（仅负责拆解和委派任务）和核心限制（不能直接调用工具），且语义与标准答案完全一致，无冗余、无歧义、无遗漏。"
+      },
+      {
+        "id": "q08",
+        "query": "Crew 的构建采用什么生命周期设计以实现配置热更新？",
+        "e2e_seconds": 3.61,
+        "first_event_seconds": 0.35,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus架构白皮书] (相似度=0.016)\n  内容: ### 1. Crew 每请求新建即销毁\n`build_crew_from_db()` 每次调用从 DB 重新装配 Crew，执行完丢弃。配置热更新无需缓存失效逻辑。\n\n结果2: [Nexus项目进度文档] (相似度=0.016)\n  内容: #### 3. CrewFactory 改造（核心）\n\n结果3: [Nexus架构白皮书] (相似度=0.016)\n  内容: ### 4.3 配置热更新\n\n结果4: [Nexus项目进度文档] (相似度=0.016)\n  内容: #### 5B.",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "Crew 的构建采用“每请求新建即销毁”的生命周期设计：`build_crew_from_db()` 每次调用从数据库重新装配 Crew，执行完成后立即丢弃。该设计使得配置热更新无需额外的缓存失效逻辑。",
+        "judge_relevance": 1.0,
+        "judge_relevance_reason": "回答直接针对问题中‘Crew 的构建采用什么生命周期设计以实现配置热更新’这一核心提问，准确指出‘每请求新建即销毁’这一关键设计模式，并进一步说明其作用机制（每次调用从数据库重新装配、执行后立即丢弃）及优势（无需额外缓存失效逻辑），逻辑清晰、术语准确、切中要害，完全相关且切题。",
+        "judge_faithfulness": 1.0,
+        "judge_faithfulness_reason": "所有断言均被上下文明确支持：(1) '每请求新建即销毁' 对应片段[1]标题及描述；(2) 'build_crew_from_db() 每次调用从数据库重新装配 Crew' 直接引用片段[1]原文；(3) '执行完成后立即丢弃' 与片段[1]中'执行完丢弃'、片段[3]中'执行完毕即销毁'完全一致；(4) '该设计使得配置热更新无需额外的缓存失效逻辑' 与片段[1]末句'配置热更新无需缓存失效逻辑'字面匹配。",
+        "judge_completeness": 1.0,
+        "judge_completeness_reason": "系统回答完整覆盖了标准答案的所有关键信息点：1) '每次调用 build_crew_from_db 从 DB 重新装配 Crew' → 对应'每次调用...从数据库重新装配 Crew'；2) '执行完丢弃' → 对应'执行完成后立即丢弃'；3) '从而实现配置热更新' → 对应'该设计使得配置热更新无需额外的缓存失效逻辑'，且进一步解释了热更新的实现机制（隐含并强化了'无需重启/重载即可生效'这一热更新本质）。术语准确（'DB'与'数据库'等价），语义无损，逻辑更完整。"
+      },
+      {
+        "id": "q14",
+        "query": "rag_search 工具的主要用途是什么？",
+        "e2e_seconds": 4.35,
+        "first_event_seconds": 0.26,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus工具开发指南] (相似度=0.016)\n  内容: ```python\nclass RagSearchTool(BaseTool):\n    name: str = \"rag_search\"\n    top_k_default: int = 5  # ← Pydantic field，通过 cls(top_k_default=3) 传入\n\n结果2: [Nexus项目进度文档] (相似度=0.016)\n  内容: #### 5. RAG 工具 + 注册\n- `backend/app/tools/rag_search_tool.py`（新增",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "rag_search 工具的主要用途是：在已上传的私有知识库中做语义检索，返回最相关的文本片段。具体实现为 `RagSearchTool(BaseTool)`，其 `name` 为 `\"rag_search\"`，支持参数 `query`（必填检索关键词）和 `top_k`（返回最相关分块数量，默认5），用于在 CrewAI 中为 Agent 提供私有/内部文档（如公司规章、产品手册、内部文档、上传的文件内容）的检索能力。输出格式为“结果N: [来源] (相似度=0.xxx) \\n 内容...”。",
+        "judge_relevance": 1.0,
+        "judge_relevance_reason": "回答完全切题，准确解释了rag_search工具的核心用途（在私有知识库中进行语义检索）、技术实现（RagSearchTool类）、关键参数（query和top_k）、典型应用场景（公司规章、产品手册等内部文档），以及结构化输出格式，信息完整、专业且紧扣问题。",
+        "judge_faithfulness": 1.0,
+        "judge_faithfulness_reason": "所有断言均被上下文明确支持：① '在已上传的私有知识库中做语义检索' —— [3] 提到 researcher Agent 需'判断私有/公开信息'，[2] 明确其调用 document_service.search_documents（结合 pgvector，见[4] 表格说明），且 [3] 中 knowledge_qa Crew '仅挂 rag_search' 用于'纯知识库问答'，表明其面向私有知识库；② '返回最相关的文本片段' —— [2] 输出格式含'内容...'，且相似度分数（0.xxx）暗示向量语义匹配，符合 RAG 片段检索特征；③ 'RagSearchTool(BaseTool)，name为\"rag_search\"' —— [1] 和 [2] 直接声明；④ '支持参数 query（必填）和 top_k（默认5）' —— [2] 明确 args_schema 含 query/top_k，[1] 和 [5] 均指出 top_k_default=5 且可配置；⑤ '用于 CrewAI 中为 Agent 提供私有/内部文档检索能力' —— [3] 显示 researcher Agent 工具列表追加 rag_search，backstory 强调'根据问题性质选择检索方式'（隐含私有/公开区分），并列举'公司规章、产品手册、内部文档、上传的文件内容'虽为解释性补充，但完全契合 [3] 的'私有信息'判断要求及 seed.py 中 ToolConfig 上下文；⑥ '输出格式为“结果N: [来源] (相似度=0.xxx) \\n 内容...”' —— [2] 原文逐字一致。",
+        "judge_completeness": 1.0,
+        "judge_completeness_reason": "系统回答完整覆盖了标准答案的所有关键信息点：① 工具名称为 'rag_search'；② 用途是‘在已上传的私有知识库中做语义检索’；③ 明确指出底层实现为 pgvector 知识库检索（通过‘即 pgvector 知识库检索’这一表述在标准答案中给出，而系统回答虽未显式写出‘pgvector’四字，但‘语义检索’+‘CrewAI 中为 Agent 提供私有/内部文档……的检索能力’+上下文技术栈（如常见于 RAG with pgvector）可合理推断其本质；但需严格比对——标准答案中‘即 pgvector 知识库检索’是明确声明的关键技术实现细节，而系统回答中未出现‘pgvector’一词。经审慎核查：该信息点确未在系统回答中出现，属于遗漏。"
+      },
+      {
+        "id": "q18",
+        "query": "hierarchical 模式下 manager_agent 必须设置什么参数才能委派任务？",
+        "e2e_seconds": 4.41,
+        "first_event_seconds": 0.29,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus架构白皮书] (相似度=0.016)\n  内容: ### 7. hierarchical 模式 — manager_agent 不能挂 tools\nCrewAI 限制：manager_agent 仅负责拆解和委派，不能直接调用工具。\n\n结果2: [Nexus项目进度文档] (相似度=0.016)\n  内容: `agent_id` 从 `nullable=False` 改为 `nullable=True`（hierarchical 模式下 task 可不绑 agent，由 manager 动态分配）\n- `backend/alembic/",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "hierarchical 模式下，manager_agent 必须通过 `manager_agent=manager_agent` 参数传入 Crew 构造函数（即在创建 Crew 实例时显式指定 `manager_agent` 参数），且该 manager_agent 不能挂载 tools；同时，task 的 `agent_id` 需设为 `nullable=True`，以支持由 manager 动态分配 agent。此外，CrewConfig 表中需新增 `manager_agent_id` 字段并配置外键约束，SQLAlchemy 中需用 `foreign_keys=[manager_agent_id]` 显式消歧。",
+        "judge_relevance": 0.2,
+        "judge_relevance_reason": "回答严重偏离问题核心。用户询问的是在 hierarchical 模式下 manager_agent 必须设置什么参数才能委派任务，属于对 CrewAI（或类似多智能体框架）实际使用配置的实践性问题。但回答混入了虚构的数据库设计内容（如 'CrewConfig 表'、'SQLAlchemy 外键约束'、'manager_agent_id 字段'），而 CrewAI 官方文档和源码中并无此类数据库表结构或 ORM 层设计——Crew 是纯 Python 内存对象，不依赖 SQL 数据库。正确答案应聚焦于 Crew 构造参数（如 `manager_agent`）、agent 配置（如 `allow_delegation=True`、`tools=None`）、task 配置（如 `agent` 未指定、`context` 或 `expected_output` 等支持委派的要素），而非虚构的数据库 schema。因此，回答不相关、不切题，且包含事实性错误。",
+        "judge_faithfulness": 1.0,
+        "judge_faithfulness_reason": "所有断言均被上下文明确支持：\n- 'manager_agent 必须通过 `manager_agent=manager_agent` 参数传入 Crew 构造函数' → [3] 明确指出 'Crew 构造：hierarchical 时传 `manager_agent=manager_agent`（manager 不在 `agents=` 列表中）'；\n- '该 manager_agent 不能挂载 tools' → [1] 和 [5].1 均强调 'manager_agent 仅负责拆解和委派，不能直接调用工具'，且 [5].1 补充 'factory.py 中 manager 构造时不传 `tools=` 参数，seed 中 orchestrator 的 tools 设为 `[]`'；\n- 'task 的 `agent_id` 需设为 `nullable=True`' → [2] 和 [5].4 均明确说明 `alter_column(\"task_configs\", \"agent_id\", nullable=True)` 及 'hierarchical 模式下 task 可不绑 agent'；\n- 'CrewConfig 表中需新增 `manager_agent_id` 字段并配置外键约束' → [2] 提到 `add_column(\"crew_configs\", manager_agent_id)` + FK 约束，[5].2 和 [5].3 进一步确认其存在及 `ondelete=\"SET NULL\"` 和 `foreign_keys=[manager_agent_id]` 消歧需求。",
+        "judge_completeness": 0.2,
+        "judge_completeness_reason": "系统回答完全偏离标准答案的核心要求。标准答案仅强调一个简洁、明确的技术前提：'manager_agent 必须设置 allow_delegation=True 才能委派任务给子 agent'。而系统回答错误地引入了大量与标准答案无关甚至错误的细节：（1）混淆了 Crew 的初始化方式（Crew 构造函数中并无 manager_agent=... 参数，这是对 crewai 框架的严重误读；crewai 中 manager agent 是通过 Agent 的 role/allow_delegation 和 Task 的 agent 关系隐式实现的，不需在 Crew 初始化时传入 manager_agent）；（2）错误声称 manager_agent '不能挂载 tools'（实际允许，且 delegation 不依赖此限制）；（3）错误要求 task.agent_id 设为 nullable=True（crewai 中 Task.agent 是必需的 Agent 实例，非数据库字段，无 SQLAlchemy schema 层面的 agent_id 字段）；（4）虚构了 CrewConfig 表、manager_agent_id 外键、SQLAlchemy 配置等——crewai 是纯 Python 库，不内置 ORM 或数据库表结构，该描述完全不存在于官方文档或源码中。因此，系统回答未覆盖标准答案中唯一关键点（allow_delegation=True），反而用虚构、错误的工程细节掩盖了本质。"
+      },
+      {
+        "id": "q23",
+        "query": "用于纯知识库问答对照测试的 Crew 叫什么？",
+        "e2e_seconds": 2.53,
+        "first_event_seconds": 0.27,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus项目进度文档] (相似度=0.016)\n  内容: **目标**：构建\"URL 抓取→markdown 撰写→主管审批循环→知识库入库\"的端到端 hierarchical Crew。\n\n结果2: [Nexus项目进度文档] (相似度=0.016)\n  内容: ### Week 10：网页内容编排入库 Crew（Orchestrator 模式）\n\n结果3: [Nexus工具开发指南] (相似度=0.016)\n  内容: # 自定义 CrewAI Tool 开发指南\n\n结果4: [Nexus架构白皮书] (相似度=0.016)\n  内容: ",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "知识库中未提及用于纯知识库问答对照测试的 Crew 的具体名称。",
+        "judge_relevance": 1.0,
+        "judge_relevance_reason": "回答直接针对问题核心——询问特定Crew的名称，并明确指出知识库中未提及该名称，符合事实且无冗余信息，完全切题。",
+        "judge_faithfulness": 1.0,
+        "judge_faithfulness_reason": "回答‘知识库中未提及用于纯知识库问答对照测试的 Crew 的具体名称’是严格基于上下文的忠实陈述。上下文片段[1]–[5]均未出现任何Crew名称（如'kb_qa_crew'、'qa_orchestrator'、'knowledge_retrieval_crew'等）与‘纯知识库问答对照测试’相关联；所有提及的Crew均为‘hierarchical Crew’、‘team_orchestrator Crew’或泛称‘Crew’，且其目标明确限定于‘URL抓取→markdown撰写→主管审批循环→知识库入库’（[1]）或‘网页内容编排入库’（[2]），属于内容生产/入库流程，而非问答对照测试场景。因此该断言完全被上下文支持，无 unsupported 断言。",
+        "judge_completeness": 0.0,
+        "judge_completeness_reason": "标准答案明确指出：用于纯知识库问答对照测试的 Crew 是 'knowledge_qa'，且其关键特征为单 Agent、仅挂 rag_search。系统回答完全否认了该信息（称'知识库中未提及'），既未给出正确名称，也未确认其单 Agent 和仅挂 rag_search 的结构，因此遗漏全部关键信息点。"
+      },
+      {
+        "id": "q26",
+        "query": "设计文档中 HITL 人类审批的实现思路是什么？",
+        "e2e_seconds": 4.74,
+        "first_event_seconds": 0.27,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus架构白皮书] (相似度=0.016)\n  内容: ### 4.2 HITL 审批流\n\n结果2: [Nexus架构白皮书] (相似度=0.016)\n  内容: ### 4. HITL 用 Redis 状态机而非 CrewAI 原生 human_input\nCrewAI 原生 human_input 阻塞线程，无法用于 Web。自定义 HumanApprovalTool 通过 Redis 轮询实现异步等待。\n\n结果3: [Nexus项目进度文档] (相似度=0.016)\n  内容: **不引入 HITL**：审批由主 agent 自主执行（",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "设计文档中 HITL 人类审批的实现思路是：  \n- 不使用 CrewAI 原生 `human_input`（因其阻塞线程，不适用于 Web 场景）；  \n- 自定义 `HumanApprovalTool`，通过 Redis 轮询实现异步等待，即采用 Redis 状态机机制；  \n- 演进方向支持沉浸式审批与多端协同：对接企业微信/钉钉/飞书 Bot，当 Agent 触发高危操作时，审批卡片直接推送到负责人 IM 软件，负责人点击“批准”后，通过 Webhook 回调唤醒后端 Agent 继续执行。",
+        "judge_relevance": 1.0,
+        "judge_relevance_reason": "回答完全切题，精准聚焦于设计文档中HITL（Human-in-the-Loop）人类审批的实现思路，逐层展开技术选型依据（弃用CrewAI原生human_input）、核心实现机制（自定义工具+Redis轮询+状态机）、以及演进方向（IM集成、卡片推送、Webhook回调），逻辑清晰、术语准确、具备工程落地细节，与用户问题‘HITL人类审批的实现思路’高度一致。",
+        "judge_faithfulness": 0.8,
+        "judge_faithfulness_reason": "回答中大部分内容被上下文明确支持：① '不使用 CrewAI 原生 human_input（因其阻塞线程，不适用于 Web 场景）' → 支持于[3]；② '自定义 HumanApprovalTool，通过 Redis 轮询实现异步等待，即采用 Redis 状态机机制' → [3]明确指出'自定义 HumanApprovalTool 通过 Redis 轮询实现异步等待'，[4]标题'七、HITL 工具特殊处理'和[3]中'用 Redis 状态机而非 CrewAI 原生 human_input'共同支持'Redis 状态机'表述；③ '演进方向支持沉浸式审批与多端协同：对接企业微信/钉钉/飞书 Bot...' —— 此部分在提供的上下文中**完全未出现**：所有片段均未提及企业微信、钉钉、飞书、Bot、IM 推送、审批卡片、Webhook 回调等任何具体集成方案或演进规划。该句属于合理推测或外部知识，但无上下文依据。",
+        "judge_completeness": 1.0,
+        "judge_completeness_reason": "系统回答完整覆盖了标准答案的所有关键信息点：1) 使用 Redis 状态机实现挂起（对应‘Redis 状态机挂起’）；2) 自定义审批工具将审批单写入 Redis（对应‘自定义审批工具将审批单写入 Redis’）；3) 前端通过 REST API 修改状态（隐含在‘轮询检测状态变更’及‘Webhook 回调唤醒’中，且‘前端修改状态’是 REST API 的典型用法，与设计文档语境一致）；4) 工具检测到状态变更后返回（明确表述为‘轮询实现异步等待’‘检测到状态变更后…唤醒后端 Agent 继续执行’）。此外，系统回答还补充了演进方向（IM 推送、多端协同），属合理扩展，不削弱对标准答案的覆盖。无遗漏项。"
+      },
+      {
+        "id": "q28",
+        "query": "MVP 阶段面对 CrewAI 框架限制应如何应对？",
+        "e2e_seconds": 4.24,
+        "first_event_seconds": 0.4,
+        "rag_search_called": true,
+        "rag_tool_result_preview": "在知识库中找到 5 条相关结果：\n\n结果1: [Nexus设计文档] (相似度=0.016)\n  内容: 一、 技术方案与可行性评估\n1. 技术栈选型\n为了完美承载 CrewAI 并满足 Web 端的实时交互需求，采用 “Python 核心引擎 + TS 轻量控制前端” 的跨语言分离架构。\n核心引擎 (Backend)：Python + CrewAI + FastAPI (提供异步 API 与 SSE 流式推送) + SQLAlchemy (ORM)。\n前端控制台 (Frontend)：Next.js (React) + Tailwind CSS + Shadcn UI + Vercel AI",
+        "event_types": [
+          "agent_thinking",
+          "tool_call",
+          "tool_result",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "thinking_token",
+          "token",
+          "agent_thinking",
+          "task_completed",
+          "final_answer",
+          "done"
+        ],
+        "answer": "知识库中未明确提及“MVP 阶段面对 CrewAI 框架限制应如何应对”的具体应对策略。检索结果涉及架构演进（如沙盒私有化、分布式工作流引擎）、技术难点与宏观解决思路（如多智能体流式输出、HITL、配置热更新），但均未直接总结或归纳“MVP 阶段应对 CrewAI 框架限制”的通用方法论或具体措施。因此，知识库无相关内容。",
+        "judge_relevance": 0.2,
+        "judge_relevance_reason": "回答虽指出知识库中无直接相关内容，但未基于通用工程实践或CrewAI框架的已知特性（如Agent/Task/Crew抽象限制、本地执行约束、缺乏内置监控/重试机制等）提供任何实质性建议；MVP阶段应对框架限制的核心策略（如最小化依赖、Mock替代、渐进式集成、封装适配层等）完全缺失。回答停留在‘无信息’声明层面，未做合理外推或领域常识性回应，偏离用户寻求实操指导的意图。",
+        "judge_faithfulness": 0.9,
+        "judge_faithfulness_reason": "回答中'知识库中未明确提及“MVP 阶段面对 CrewAI 框架限制应如何应对”的具体应对策略'基本成立，但后半句'因此，知识库无相关内容'存在轻微过度推断。上下文[5]明确写道：'核心纪律：MVP 阶段严禁陷入 CrewAI 底层源码的修改。遇到框架限制，优先通过“外围包装（如自定义工具、中间件）”来绕过。'——这正是对MVP阶段应对CrewAI框架限制的**直接、明确、可操作的通用策略**。因此，'未明确提及'和'无相关内容'两项断言均不成立；'涉及架构演进……但均未直接总结或归纳……'亦不准确，因[5]已给出高度凝练的方法论（外围包装优先）。唯一支持的是'检索结果涉及……技术难点与宏观解决思路'，这部分正确。",
+        "judge_completeness": 0.0,
+        "judge_completeness_reason": "系统回答完全未覆盖标准答案的关键信息点。标准答案明确给出了MVP阶段的强制性原则：'严禁陷入CrewAI底层源码修改'，并指定了首选应对策略：'优先通过外围包装（自定义工具、中间件）绕过'。而系统回答声称'知识库无相关内容'，既未确认也未否定该原则，更未提取或转述该具体方法论；其列举的'沙盒私有化''分布式工作流引擎'等术语与标准答案无关，且错误地将宏观架构演进内容当作相关依据，导致实质性遗漏全部核心要素。"
+      }
+    ],
+    "aggregate": {
+      "relevance": 0.7916666666666666,
+      "faithfulness": 0.975,
+      "completeness": 0.5166666666666667,
+      "e2e_seconds": {
+        "p50_ms": 3126.8,
+        "p90_ms": 4407.2,
+        "max_ms": 4738.9,
+        "n": 12
+      },
+      "first_event_seconds": {
+        "p50_ms": 280.8,
+        "p90_ms": 386.4,
+        "max_ms": 399.3,
+        "n": 12
+      },
+      "rag_call_rate": 1.0,
+      "n_queries": 12
+    }
+  },
+  "embedding_probe": {
+    "per_chunk_ms": {
+      "p50_ms": 112.5,
+      "p90_ms": 282.3,
+      "max_ms": 282.3,
+      "n": 4
+    },
+    "sample_n": 20
+  }
+}

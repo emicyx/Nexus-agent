@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  backend-unit:
+    name: Backend 单测（无外部依赖）
+    runs-on: ubuntu-latest
+    env:
+      # 仅初始化 Settings 用，单测不发真实 LLM 请求
+      QWEN_API_KEY: sk-ci-dummy
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt pytest pytest-asyncio
+      - name: Run unit tests
+        run: python -m pytest testing/unit -q
+
+  backend-integration:
+    name: Backend 集成（compose 起 PG/Redis）
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      QWEN_API_KEY: sk-ci-dummy
+      POSTGRES_DSN: postgresql://nexus:nexus@localhost:5432/nexus
+      REDIS_URL: redis://localhost:6379/0
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt pytest pytest-asyncio
+      # postgres 镜像含 zhparser（首次构建需编译，约 3-5 分钟）
+      - name: Start postgres + redis
+        run: docker compose up -d --build postgres redis
+      - name: Wait for postgres healthy
+        run: |
+          for i in $(seq 1 30); do
+            status=$(docker inspect --format='{{.State.Health.Status}}' $(docker compose ps -q postgres) 2>/dev/null || echo starting)
+            echo "postgres: $status"
+            [ "$status" = "healthy" ] && exit 0
+            sleep 5
+          done
+          exit 1
+      - name: Run integration tests
+        run: python -m pytest testing/integration -q
+
+  frontend:
+    name: Frontend 类型检查 + 构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install dependencies
+        working-directory: frontend
+        run: npm ci
+      - name: Type check
+        working-directory: frontend
+        run: npx tsc --noEmit
+      - name: Build
+        working-directory: frontend
+        run: npm run build

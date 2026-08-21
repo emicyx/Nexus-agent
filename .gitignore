@@ -26,6 +26,7 @@ frontend/build/
 # —— IDE ——
 .idea/
 .vscode/
+.zcode/
 *.swp
 *.swo
 
@@ -39,7 +40,8 @@ pgdata/
 sse_output*.txt
 sse_deepseek.txt
 tmp/
-testing/
+# 简历类私人文档不推送（testing/ 测试代码本身需提交）
+testing/*简历*
 
 # —— OS ——
 .DS_Store
