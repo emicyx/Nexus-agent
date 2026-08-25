@@ -92,6 +92,14 @@ class FetchUrlInput(BaseModel):
             "为空时抓取整个 body。"
         ),
     )
+    save_as: str = Field(
+        "",
+        description=(
+            "可选：指定保存文件名（仅文件名，不含目录；不带扩展名或带 .md 均可）。"
+            "指定后返回路径即为 outputs/raw/{save_as}.md，调用方无需猜测命名规则。"
+            "示例：save_as='owcs-home'"
+        ),
+    )
 
 
 class FetchUrlTool(BaseTool):
@@ -105,8 +113,10 @@ class FetchUrlTool(BaseTool):
         "抓取指定 URL 的网页内容并转换为 markdown 格式，自动保存到磁盘。"
         "触发时机：当需要阅读某个网页、提取网页正文内容、"
         "为知识库入库准备 markdown 素材时使用。\n"
-        "行为：抓取成功后自动将完整 markdown 保存到 outputs/raw/{slug}.md，"
-        "只返回简短摘要（标题+字数+文件路径），不返回全文。\n"
+        "行为：抓取成功后自动将完整 markdown 保存到 outputs/raw/，"
+        "只返回简短摘要（标题+字数+文件路径），不返回全文。"
+        "文件名默认由 URL 生成；调用方可传 save_as 显式指定"
+        "（如 save_as='owcs-home'），返回路径即为 outputs/raw/owcs-home.md。\n"
         "适用边界：内置双层抓取——先 requests 快速抓静态 HTML，"
         "若失败/内容过短/命中反爬关键词，自动降级到 Playwright 浏览器渲染 JS 后再抓，"
         "可处理 SPA（docsify/vuepress/hash 路由）和大部分反爬站点。"
@@ -117,6 +127,7 @@ class FetchUrlTool(BaseTool):
         self,
         url: str,
         selector: str = "",
+        save_as: str = "",
         **kwargs: Any,
     ) -> str:
         url = (url or "").strip()
@@ -155,7 +166,7 @@ class FetchUrlTool(BaseTool):
             ):
                 # 静态抓取成功 → 自动保存到磁盘，返回摘要
                 title = _extract_title(requests_html)
-                slug = _url_to_slug(url)
+                slug = _resolve_slug(url, save_as)
                 file_path = _save_markdown_to_file(markdown_a, slug)
                 logger.info(
                     "fetch_url requests ok → saved: %s (markdown=%d chars)",
@@ -189,7 +200,7 @@ class FetchUrlTool(BaseTool):
         if not markdown_b:
             return f"Playwright 渲染成功但转换 markdown 为空：{url}"
         # Playwright 成功 → 自动保存到磁盘，返回摘要
-        slug = _url_to_slug(url)
+        slug = _resolve_slug(url, save_as)
         file_path = _save_markdown_to_file(markdown_b, slug)
         logger.info(
             "fetch_url playwright ok → saved: %s (markdown=%d chars)",
@@ -341,6 +352,22 @@ def _url_to_slug(url: str) -> str:
     if len(slug) > _SLUG_MAX_LEN:
         slug = slug[:_SLUG_MAX_LEN].rstrip("-")
     return slug or "page"
+
+
+def _resolve_slug(url: str, save_as: str = "") -> str:
+    """解析保存文件名：save_as 优先（防路径穿越清洗），否则 URL 派生。
+
+    命名契约（2026-08-25 事故沉淀）：调用方可显式指定文件名，消灭
+    "manager 猜命名规则"的自由度；未指定时行为与旧版完全一致。
+    save_as 只取文件名部分（剥目录防穿越），复用 _url_to_slug 的字符清洗。
+    """
+    name = (save_as or "").strip()
+    if name:
+        name = Path(name).name
+        name = re.sub(r"\.(md|markdown|txt)$", "", name, flags=re.IGNORECASE)
+        if name:
+            return _url_to_slug(f"https://placeholder.local/{name}")
+    return _url_to_slug(url)
 
 
 def _save_markdown_to_file(markdown: str, slug: str) -> str:

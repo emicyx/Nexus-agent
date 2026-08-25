@@ -22,6 +22,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.crews.path_guard import sanitize_step_text, validate_claimed_output_paths
 from app.core.events import AgentEvent
 from app.core.run_control import raise_if_cancelled
 from app.crews.crewai_async_patch import apply_async_tool_patch
@@ -138,7 +139,7 @@ def _make_step_callback(
 
         evt = AgentEvent(
             type="agent_thinking",
-            content=text,
+            content=sanitize_step_text(text),  # 展示净化：剥裸 tool-call JSON/折叠重复行；AgentFinish 检测仍用原文
             step=step_counter["n"],
             agent=agent_role,
         )
@@ -892,9 +893,16 @@ def _apply_delegation_pydantic_patch() -> None:
                 output_pydantic=output_pydantic,
                 i18n=selected_agent.i18n,
             )
-            return selected_agent.execute_task(
+            result = selected_agent.execute_task(
                 task_with_assigned_agent, context
             )
+            # 路径守卫：声称的 outputs/** 路径经磁盘校验不存在时，附目录清单
+            # 注入纠错上下文（2026-08-25 事故：manager 重构文件名致下游空转）
+            if isinstance(result, str):
+                result = validate_claimed_output_paths(
+                    result, coworker=selected_agent.role
+                )
+            return result
         except Exception as e:
             return self.i18n.errors("agent_tool_execution_error").format(
                 agent_role=self.sanitize_agent_name(selected_agent.role),

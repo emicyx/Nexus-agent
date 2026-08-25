@@ -9,7 +9,12 @@ from typing import Any
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
-from app.tools._file_utils import SandboxViolation, resolve_read_path, truncate
+from app.tools._file_utils import (
+    SandboxViolation,
+    dir_listing_hint,
+    resolve_read_path,
+    truncate,
+)
 
 logger = logging.getLogger("file_viewer")
 
@@ -54,6 +59,9 @@ class FileViewerTool(BaseTool):
         except SandboxViolation as e:
             return f"拒绝读取：{e}"
         if not path.exists():
+            hint = dir_listing_hint(path)
+            if hint:
+                return f"文件不存在: {file_path}\n{hint}"
             return f"文件不存在: {file_path}"
         if not path.is_file():
             return f"路径不是文件: {file_path}"

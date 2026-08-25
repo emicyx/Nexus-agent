@@ -46,6 +46,51 @@ def read_bases() -> list[Path]:
     return bases
 
 
+def dir_listing_hint(missing: Path, base: Path | None = None) -> str | None:
+    """文件不存在时的目录清单提示（view_file 等工具 404 报错的附注）。
+
+    背景（2026-08-25 线上事故）：manager 在委派链中编造/重构文件路径，
+    下游 view_file 只报"文件不存在"，manager 缺目录信息无法自我纠正，
+    误判为抓取失败无限重试。在报错处直接附上目录实际清单（mtime 倒序）
+    与最接近文件名，把纠错信息送到最需要它的决策环节。
+    失败返回 None，调用方回退原始报错。
+    """
+    try:
+        import difflib
+        import time as _time
+        from datetime import datetime as _dt
+
+        parent = missing.parent
+        if not parent.is_dir():
+            return None
+        files = [f for f in parent.iterdir() if f.is_file()]
+        if not files:
+            return None
+        now = _time.time()
+        files.sort(key=lambda f: f.stat().st_mtime, reverse=True)
+        lines = []
+        for f in files[:12]:
+            st = f.stat()
+            age_min = max(0, int((now - st.st_mtime) // 60))
+            lines.append(
+                f"- {f.name}（{max(1, st.st_size // 1024)}KB，"
+                f"{age_min} 分钟前修改）"
+            )
+        hint = (
+            "该文件所在目录的实际内容（按修改时间，最新在前）：\n"
+            + "\n".join(lines)
+        )
+        close = difflib.get_close_matches(
+            missing.name, [f.name for f in files], n=3, cutoff=0.4
+        )
+        if close:
+            hint += f"\n最接近的文件名：{'、'.join(close)}"
+        hint += "\n提示：请从上方清单逐字复制真实文件名，禁止自行拼接/编造路径。"
+        return hint
+    except Exception:  # noqa: BLE001 - 提示失败回退原始报错
+        return None
+
+
 def _ensure_within(path: Path, base: Path, what: str) -> Path:
     resolved = path.resolve()
     if resolved == base or base in resolved.parents:
