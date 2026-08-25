@@ -35,8 +35,10 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY . .
 
 # P1-10：非 root 运行（uid/gid 1000 与常见云主机用户对齐，便于 data 目录授权）
+# outputs 一并预建：named volume 首挂时会继承镜像内属主；
+# bind mount 场景镜像内容被遮蔽，需在宿主机预授权（见 doc/上线部署手册.md）
 RUN useradd -m -u 1000 appuser \
-    && mkdir -p /app/data \
+    && mkdir -p /app/data/outputs \
     && chown -R appuser:appuser /app/data
 USER appuser
 
