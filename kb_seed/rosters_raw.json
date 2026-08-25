@@ -1,0 +1,135 @@
+{
+ "Team Liquid": {
+  "region": "NA · 合作战队",
+  "players": [
+   "TR33",
+   "Zeruhh",
+   "Infekted",
+   "Attack",
+   "Vega",
+   "KIVIS"
+  ]
+ },
+ "Dallas Fuel": {
+  "region": "NA · 合作战队（2026 新加入）",
+  "players": [
+   "Kronik",
+   "SeonJun",
+   "Kellan",
+   "Cjay",
+   "Lukemino"
+  ]
+ },
+ "Disguised": {
+  "region": "NA · 合作战队（2026 新加入）",
+  "players": [
+   "PGE",
+   "Tred",
+   "Scyle",
+   "KiWii"
+  ]
+ },
+ "Spacestation Gaming": {
+  "region": "NA · 合作战队",
+  "players": null
+ },
+ "Twisted Minds": {
+  "region": "EMEA · 合作战队（2025 世界冠军）",
+  "players": [
+   "Quartz",
+   "Youbi",
+   "JaeWoo",
+   "TVNT",
+   "KSAA",
+   "FunnyAstro",
+   "Simple"
+  ]
+ },
+ "Virtus.pro": {
+  "region": "EMEA · 合作战队",
+  "players": null
+ },
+ "Team Peps": {
+  "region": "EMEA · 合作战队（2026 新加入）",
+  "players": [
+   "Rav",
+   "Xzodyal",
+   "Willys07",
+   "KroxZ",
+   "FDGod",
+   "Xeriongdh"
+  ]
+ },
+ "Team Falcons": {
+  "region": "亚洲（韩国）· 合作战队",
+  "players": [
+   "MER1T",
+   "Checkmate",
+   "SP1NT",
+   "Hanbin",
+   "Someone",
+   "ChiYo",
+   "Fielder"
+  ]
+ },
+ "Crazy Raccoon": {
+  "region": "亚洲（日本）· 合作战队",
+  "players": [
+   "HeeSang",
+   "LIP",
+   "Stalk3r",
+   "JunBin",
+   "MAX",
+   "CH0R0NG",
+   "Vigilante"
+  ]
+ },
+ "T1": {
+  "region": "亚洲（韩国）· 合作战队",
+  "players": null
+ },
+ "ZETA DIVISION": {
+  "region": "亚洲（日本）· 合作战队",
+  "players": [
+   "KNIFE",
+   "Proper",
+   "Bernar",
+   "Mealgaru",
+   "Shu",
+   "Viol2t"
+  ]
+ },
+ "Weibo Gaming": {
+  "region": "中国 · 合作战队（2026 新设）",
+  "players": null
+ },
+ "JD Gaming": {
+  "region": "中国 · 合作战队（2026 新设）",
+  "players": [
+   "Li_Zhuo",
+   "Liu_Nian",
+   "Roxy",
+   "Li_Xianyao"
+  ]
+ },
+ "All Gamers": {
+  "region": "中国 · 合作战队（2026 新设）",
+  "players": null
+ },
+ "VARREL": {
+  "region": "亚洲（日本赛区代表）",
+  "players": null
+ },
+ "9z Team": {
+  "region": "南美 · 区域资格晋级 EWC",
+  "players": null
+ },
+ "Team Secret": {
+  "region": "区域资格晋级 EWC",
+  "players": null
+ },
+ "Geekay Esports": {
+  "region": "区域资格晋级 EWC",
+  "players": null
+ }
+}

@@ -58,3 +58,4 @@ doc/*简明*
 
 # backend/testing/ 是 testing/ 的本地镜像（容器经 ./backend 挂载访问），不入库
 backend/testing/
+team_json/
