@@ -29,11 +29,13 @@ _CLAIMED_PATH_RE = re.compile(
     r"(?:^|[\s'\"=：:《（(【\[])((?:\./)?outputs/[A-Za-z0-9_\-./\u4e00-\u9fff]+\.[A-Za-z0-9]{1,8})"
 )
 
-# 独占一行的裸 tool-call JSON（manager 决策残留）：{"name": "xxx", "arguments": {...}}
-_BARE_TOOLCALL_RE = re.compile(
-    r"^\s*\{\s*\"name\"\s*:\s*\"[^\"]+\"\s*,\s*\"arguments\"\s*:\s*\{.*?\}\s*\}\s*,?\s*$",
-    re.MULTILINE,
+# 裸 tool-call JSON（manager 决策残留）：{"name": "xxx", "arguments": {...}}。
+# 不锚定行首——线上出现过变体：'🕗 {...} </tool_call>'（带表情前缀 + 解析标签）
+_BARE_TOOLCALL_JSON_RE = re.compile(
+    r'\{\s*"name"\s*:\s*"[^"]+"\s*,\s*"arguments"\s*:\s*\{.*?\}\s*\}'
 )
+_TOOLCALL_TAG_RE = re.compile(r"</?tool_call>")
+_HAS_WORD_RE = re.compile(r"[\w\u4e00-\u9fff]")
 
 _MAX_LIST_ENTRIES = 12
 
@@ -103,16 +105,18 @@ def sanitize_step_text(text: str) -> str:
     try:
         if not text:
             return text
-        cleaned = _BARE_TOOLCALL_RE.sub("", text)
+        cleaned = _TOOLCALL_TAG_RE.sub("", text)
+        cleaned = _BARE_TOOLCALL_JSON_RE.sub("", cleaned)
         seen: set[str] = set()
         kept: list[str] = []
         blank_streak = 0
         for line in cleaned.splitlines():
             stripped = line.strip()
-            if not stripped:
+            # 无字词的行（空白/纯标点表情/剥离后的残壳）视作空行
+            if not _HAS_WORD_RE.search(stripped):
                 blank_streak += 1
-                if blank_streak <= 1:
-                    kept.append(line)
+                if blank_streak <= 1 and kept:
+                    kept.append("")
                 continue
             blank_streak = 0
             if stripped in seen:

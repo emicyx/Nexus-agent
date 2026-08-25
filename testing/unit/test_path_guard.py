@@ -103,6 +103,18 @@ class TestSanitizeStepText:
         assert "fetch_url" not in out
         assert "决策：先核对文件路径" in out
 
+    def test_strip_emoji_prefixed_toolcall_variant(self):
+        """2026-08-25 第三轮 trace 变体：'🕗 {...} </tool_call>'。"""
+        text = (
+            '🕗 {"name": "delegate_work_to_coworker", "arguments": '
+            '{"coworker": "内容撰写员", "task": "汇报失败"}} </tool_call>\n'
+            "结论：流程暂停待用户输入"
+        )
+        out = sanitize_step_text(text)
+        assert "delegate_work_to_coworker" not in out
+        assert "</tool_call>" not in out
+        assert "结论：流程暂停待用户输入" in out
+
     def test_all_json_falls_back_to_original(self):
         text = '{"name": "t", "arguments": {"a": 1}}'
         assert sanitize_step_text(text) == text
