@@ -25,13 +25,23 @@ from app.services.hybrid_search import (
     hybrid_params,
     map_rows,
 )
-from app.services.semantic_chunker import semantic_chunk
+from app.services.semantic_chunker import contextualize_chunks, semantic_chunk
 
 logger = logging.getLogger("document_service")
 
 # 分块参数（保留旧参数供 _split_chunks 单测参考；入库实际用 semantic_chunk）
 _CHUNK_MAX_CHARS = 500
 _PARA_SEP = "\n\n"
+
+
+def _chunk_with_context(content: str, name: str) -> list[str]:
+    """语义切块 + 标题上下文化（供 to_thread 执行：semantic_chunk 内含同步 embedding）。
+
+    上下文化（2026-08-26 SOP 02 事故修复）：给每块加 "[文档名 · 章节路径]" 前缀，
+    避免正文块（代码/表格）embedding 相似度被导航块全面压制。
+    """
+    chunks = semantic_chunk(content)
+    return contextualize_chunks(chunks, name, content)
 
 
 def _split_chunks(text: str) -> list[str]:
@@ -56,12 +66,12 @@ async def ingest_document(
     content: str,
     source_type: str = "text",
 ) -> DocumentConfig:
-    """语义切块 + 嵌入 + 写入文档与分块。
+    """语义切块 + 标题上下文化 + 嵌入 + 写入文档与分块。
 
     语义切块（semantic_chunk）内部含同步 embedding 调用，用 asyncio.to_thread
     放到 worker 线程执行，不阻塞事件循环。
     """
-    chunks_text = await asyncio.to_thread(semantic_chunk, content)
+    chunks_text = await asyncio.to_thread(_chunk_with_context, content, name)
     if not chunks_text:
         raise ValueError("文档内容为空，无法切块")
 
@@ -165,6 +175,28 @@ async def delete_document(session: AsyncSession, doc_id: int) -> bool:
     return True
 
 
+# KB 预注入检索 SQL（2026-08-26 SOP 02 事故修复）：
+# 排除多块文档的 position=0 块——它们是"标题+目标+简介"导航块，与
+# "我想做 X 该怎么操作"类问题语义天然最近，预注入它们只会把 agent 推向目录
+# （事故中第一轮预注入的正是 SOP 01 标题块 + README 索引）。
+# 单块文档（全文只有一块）的 position=0 就是正文本身，不排除。
+_KB_PREINJECT_SQL = sa_text(
+    """
+    SELECT dc.content, dc.position,
+           dc.embedding <=> CAST(:vec AS vector) AS distance,
+           doc.name AS document_name
+    FROM document_chunks dc
+    JOIN document_configs doc ON dc.document_id = doc.id
+    WHERE (dc.position > 0 OR (
+        SELECT COUNT(*) FROM document_chunks d2
+        WHERE d2.document_id = dc.document_id
+    ) <= 1)
+    ORDER BY dc.embedding <=> CAST(:vec AS vector)
+    LIMIT :pool
+    """
+)
+
+
 async def search_kb_high_confidence(
     query_vec: list[float],
     top_k: int = 2,
@@ -174,6 +206,7 @@ async def search_kb_high_confidence(
 
     用于 kickoff 前预注入相关知识库片段到 task description。
     cosine distance < (1 - threshold) 视为高置信。
+    排除多块文档的 position=0 导航块（见 _KB_PREINJECT_SQL 注释）。
     返回 [{"content", "document_name", "score"}]，score = 1 - distance。
     """
     if not query_vec:
@@ -183,20 +216,9 @@ async def search_kb_high_confidence(
         vec_str = vec_to_sql_literal(query_vec)
         # 先取 3 倍候选，再按距离阈值过滤
         pool = top_k * 3
-        stmt = sa_text(
-            """
-            SELECT dc.content, dc.position,
-                   dc.embedding <=> CAST(:vec AS vector) AS distance,
-                   doc.name AS document_name
-            FROM document_chunks dc
-            JOIN document_configs doc ON dc.document_id = doc.id
-            ORDER BY dc.embedding <=> CAST(:vec AS vector)
-            LIMIT :pool
-            """
-        )
         async with AsyncSessionLocal() as db:
             rows = (await db.execute(
-                stmt, {"vec": vec_str, "pool": pool}
+                _KB_PREINJECT_SQL, {"vec": vec_str, "pool": pool}
             )).fetchall()
 
         max_distance = 1.0 - score_threshold

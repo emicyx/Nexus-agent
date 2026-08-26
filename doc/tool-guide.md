@@ -71,7 +71,7 @@ def instantiate_tool(tool_key: str, config_json: Any | None = None) -> BaseTool:
     cfg = config_json or {}
 
     if tool_key == "rag_search":
-        top_k = cfg.get("top_k", 5)
+        top_k = cfg.get("top_k", 10)
         return cls(top_k_default=top_k)
     elif tool_key == "baidu_search":
         max_results = cfg.get("max_results", 20)
@@ -85,15 +85,17 @@ def instantiate_tool(tool_key: str, config_json: Any | None = None) -> BaseTool:
 ```python
 class RagSearchTool(BaseTool):
     name: str = "rag_search"
-    top_k_default: int = 5  # ← Pydantic field，通过 cls(top_k_default=3) 传入
+    top_k_default: int = 10  # ← Pydantic field，通过 cls(top_k_default=3) 传入
 
-    def _run(self, query: str, top_k: int = 20) -> str:
-        if top_k == 20:  # 未显式指定时用默认值
+    def _run(self, query: str, top_k: int = _SCHEMA_TOP_K_DEFAULT) -> str:
+        # schema 默认值 = LLM 未显式传参（Pydantic 自动填充）→ 用配置的默认值
+        # （2026-08-26 修复：此前签名默认值直接使用，config_json 的 top_k 永远不生效）
+        if top_k == _SCHEMA_TOP_K_DEFAULT:
             top_k = self.top_k_default
         ...
 ```
 
-当前仅 `rag_search`（top_k）和 `baidu_search`（max_results，默认 20）支持参数化，其余为无参构造。
+当前仅 `rag_search`（top_k，默认 10）和 `baidu_search`（max_results，默认 20）支持参数化，其余为无参构造。
 
 ---
 
@@ -158,7 +160,7 @@ const TOOL_PARAM_SCHEMA: Record<
   string,
   { key: string; label: string; default: number; min: number; max: number }
 > = {
-  rag_search: { key: "top_k", label: "检索结果数量", default: 5, min: 1, max: 50 },
+  rag_search: { key: "top_k", label: "检索结果数量", default: 10, min: 1, max: 50 },
   baidu_search: { key: "max_results", label: "最大搜索结果数", default: 20, min: 1, max: 50 },
   // my_tool: { key: "my_param", label: "参数说明", default: 1, min: 0, max: 10 },
 };
@@ -176,7 +178,7 @@ ToolForm 按 tool_key 自动渲染对应数字输入框；无条目的工具显�
 | 中间产物 | `intermediate` | IntermediateTool | 中间思考产物记录 |
 | 多模态 | `add_image_local` | AddImageToolLocal | 本地图片注入（qwen3-vl-plus） |
 | 文件读取 | `fixed_directory_read` | FixedDirectoryReadTool | 目录文件浏览 |
-| RAG | `rag_search` | RagSearchTool | 混合检索（向量+关键词 RRF，top_k 默认 5） |
+| RAG | `rag_search` | RagSearchTool | 混合检索（向量+关键词 RRF，top_k 默认 10，结果带 document_id 支持二段检索） |
 | HITL | `human_approval` | HumanApprovalTool | 人类审批（60s 超时） |
 | 浏览器 | `navigate` | NavigateTool | 打开 URL |
 | 浏览器 | `click_element` | ClickElementTool | 点击元素 |

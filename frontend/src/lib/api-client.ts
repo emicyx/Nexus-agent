@@ -317,6 +317,7 @@ export interface DocumentRead {
 export interface SearchResult {
   content: string;
   document_name: string;
+  document_id: number;
   position: number;
   score: number;
 }

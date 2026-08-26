@@ -24,5 +24,6 @@ class DocumentRead(BaseModel):
 class SearchResult(BaseModel):
     content: str
     document_name: str
+    document_id: int
     position: int
     score: float

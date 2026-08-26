@@ -22,8 +22,9 @@ def test_instantiate_rag_search_with_config():
 
 
 def test_instantiate_rag_search_default():
+    # 默认 10（2026-08-02 RAG 报告 P0-1：top5→top10 证据可见率 50%→71%）
     tool = instantiate_tool("rag_search")
-    assert tool.top_k_default == 5
+    assert tool.top_k_default == 10
 
 
 def test_instantiate_baidu_search_with_config():

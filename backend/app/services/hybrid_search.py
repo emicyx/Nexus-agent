@@ -26,6 +26,7 @@ LEXEME_SQL = sa_text("SELECT lexeme FROM unnest(to_tsvector('chinese', :q))")
 HYBRID_SQL = sa_text("""
 WITH vec AS (
     SELECT dc.id AS chunk_id, dc.content AS content, dc.position AS position,
+           dc.document_id AS document_id,
            doc.name AS document_name,
            ROW_NUMBER() OVER (ORDER BY dc.embedding <=> CAST(:query_vec AS vector)) AS rn
     FROM document_chunks dc
@@ -36,6 +37,7 @@ WITH vec AS (
 ),
 kw AS (
     SELECT dc.id AS chunk_id, dc.content AS content, dc.position AS position,
+           dc.document_id AS document_id,
            doc.name AS document_name,
            ROW_NUMBER() OVER (ORDER BY ts_rank(dc.tsv, to_tsquery('chinese', :tsq)) DESC) AS rn
     FROM document_chunks dc
@@ -48,6 +50,7 @@ kw AS (
 SELECT COALESCE(vec.chunk_id, kw.chunk_id) AS chunk_id,
        COALESCE(vec.content, kw.content) AS content,
        COALESCE(vec.position, kw.position) AS position,
+       COALESCE(vec.document_id, kw.document_id) AS document_id,
        COALESCE(vec.document_name, kw.document_name) AS document_name,
        ( COALESCE(1.0 / (:k + vec.rn), 0.0)
          + COALESCE(1.0 / (:k + kw.rn), 0.0) ) AS rrf_score
@@ -81,11 +84,16 @@ def hybrid_params(
 
 
 def map_rows(rows) -> list[dict[str, Any]]:
-    """HYBRID_SQL 结果行 → [{content, document_name, position, score}]。"""
+    """HYBRID_SQL 结果行 → [{content, document_name, document_id, position, score}]。
+
+    document_id 必须随结果返回：调用方（rag_search 工具）需要把它透出给 Agent，
+    Agent 才能用 document_id 参数做"锁定该文档继续翻正文"的二段检索。
+    """
     return [
         {
             "content": r.content,
             "document_name": r.document_name,
+            "document_id": r.document_id,
             "position": r.position,
             "score": float(r.rrf_score) if r.rrf_score is not None else 0.0,
         }

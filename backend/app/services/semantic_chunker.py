@@ -246,3 +246,92 @@ def semantic_chunk(
 
     # 7) 兜底：确保没有任何块为空 / 全部非空
     return [c for c in chunks if c.strip()]
+
+
+# ---------- 分块上下文化（2026-08-26 SOP 02 检索失败修复） ----------
+
+# 标题路径深度上限（h1>h2>h3，更深层级通常只是小节序号，截断避免前缀噪声）
+_CONTEXT_MAX_DEPTH = 3
+# 单级标题截断长度
+_CONTEXT_TITLE_MAX_LEN = 40
+
+
+def _heading_spans(source_text: str) -> list[tuple[int, list[str]]]:
+    """扫描原文，返回 [(标题生效偏移, 当时的 h1>h2>… 标题路径)]。
+
+    - 围栏代码块（``` / ~~~）内的 # 行不算标题；
+    - 路径取到 _CONTEXT_MAX_DEPTH 层为止。
+    """
+    spans: list[tuple[int, list[str]]] = []
+    stack: list[tuple[int, str]] = []  # (level, title)
+    in_fence = False
+    offset = 0
+    for line in source_text.split("\n"):
+        stripped = line.strip()
+        if stripped.startswith("```") or stripped.startswith("~~~"):
+            in_fence = not in_fence
+        elif not in_fence and stripped.startswith("#"):
+            text_part = stripped.lstrip("#").strip()
+            if text_part:
+                level = len(stripped) - len(stripped.lstrip("#"))
+                title = text_part[:_CONTEXT_TITLE_MAX_LEN]
+                while stack and stack[-1][0] >= level:
+                    stack.pop()
+                stack.append((level, title))
+                spans.append((offset, [t for _, t in stack[:_CONTEXT_MAX_DEPTH]]))
+        offset += len(line) + 1  # +1 是换行符
+    return spans
+
+
+def _heading_path_at(
+    spans: list[tuple[int, list[str]]], pos: int
+) -> list[str]:
+    """二分查找偏移 pos 处生效的标题路径；无（pos 在首个标题前）返回空。"""
+    lo, hi = 0, len(spans)  # 找最后一个 offset <= pos 的 span
+    while lo < hi:
+        mid = (lo + hi) // 2
+        if spans[mid][0] <= pos:
+            lo = mid + 1
+        else:
+            hi = mid
+    return spans[lo - 1][1] if lo > 0 else []
+
+
+def contextualize_chunks(
+    chunks: list[str],
+    doc_name: str,
+    source_text: str,
+) -> list[str]:
+    """为每个分块注入 "[文档名 · 章节标题路径]" 前缀（在嵌入与存储之前调用）。
+
+    背景（2026-08-26 线上 SOP 02 事故复盘）：各文档的标题/简介"导航块"与
+    "我想做 X 该怎么操作"类问题语义天然最近，而正文块（JSON/字段表）相似度被压低，
+    top-k 被目录占满、正文永远排不进可见窗口。给正文块补上文档名+章节上下文后：
+    1. embedding 携带所属 SOP 语义，与问题中"数据英雄/字段/立绘"等词对齐；
+    2. 检索结果展示时 Agent 直接看到块来自哪份 SOP 哪一节。
+
+    实现要点：
+    - 分块保持文档顺序，块首字符在原文中可定位（单元只去首尾空白，开头不变），
+      用块开头 40 字从上次定位点向后 find，单调推进；
+    - 定位失败（极端：原文被改写）退化为仅文档名前缀，绝不丢块。
+    """
+    if not chunks:
+        return []
+    spans = _heading_spans(source_text)
+    out: list[str] = []
+    search_from = 0
+    for chunk in chunks:
+        path: list[str] = []
+        probe = chunk[:40]
+        idx = source_text.find(probe, search_from) if probe else -1
+        if idx == -1 and len(chunk) > 20:
+            idx = source_text.find(chunk[:20], search_from)
+        if idx != -1:
+            path = _heading_path_at(spans, idx)
+            search_from = idx + 1
+        if path:
+            prefix = f"[{doc_name} · {' > '.join(path)}]"
+        else:
+            prefix = f"[{doc_name}]"
+        out.append(f"{prefix}\n{chunk}")
+    return out

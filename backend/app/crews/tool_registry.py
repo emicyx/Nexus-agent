@@ -72,7 +72,7 @@ def _resolve_class(tool_key: str) -> Type[BaseTool]:
 def instantiate_tool(tool_key: str, config_json: Any | None = None) -> BaseTool:
     """根据 tool_key 实例化工具，支持 config_json 参数化。
 
-    rag_search: top_k (默认 5)
+    rag_search: top_k (默认 10；LLM 未显式传 top_k 时 _run 使用该默认值)
     baidu_search: max_results (默认 20)
     其他工具: 无参构造
     """
@@ -80,7 +80,8 @@ def instantiate_tool(tool_key: str, config_json: Any | None = None) -> BaseTool:
     cfg = config_json or {}
 
     if tool_key == "rag_search":
-        top_k = cfg.get("top_k", 5)
+        # 默认 10 = 2026-08-02 RAG 评估报告 P0-1（top5→top10 证据可见率 50%→71%）
+        top_k = cfg.get("top_k", 10)
         return cls(top_k_default=top_k)
     elif tool_key == "baidu_search":
         max_results = cfg.get("max_results", 20)

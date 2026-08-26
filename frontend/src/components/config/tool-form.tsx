@@ -20,7 +20,7 @@ const TOOL_KEY_OPTIONS = [
 
 // Week 7: 结构化参数配置（按 tool_key 渲染不同字段）
 const TOOL_PARAM_SCHEMA: Record<string, { key: string; label: string; default: number; min: number; max: number }> = {
-  rag_search: { key: "top_k", label: "top_k (检索返回条数)", default: 5, min: 1, max: 20 },
+  rag_search: { key: "top_k", label: "top_k (检索返回条数)", default: 10, min: 1, max: 20 },
   baidu_search: { key: "max_results", label: "max_results (搜索返回条数)", default: 20, min: 1, max: 50 },
 };
 

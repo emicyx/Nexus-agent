@@ -21,7 +21,7 @@ from sqlalchemy import text as sa_text
 
 from app.db.session import get_sync_session, vec_to_sql_literal
 from app.llm.embedding import embed_texts_sync
-from app.services.semantic_chunker import semantic_chunk
+from app.services.semantic_chunker import contextualize_chunks, semantic_chunk
 
 logger = logging.getLogger("kb_ingest")
 
@@ -132,9 +132,11 @@ class KbIngestTool(BaseTool):
             source_type = "web"
 
         # 语义切块（句子级 + Embedding 相似度边界，内部同步嵌入）
+        # + 标题上下文化（2026-08-26 SOP 02 事故修复：正文块带 "[文档名 · 章节路径]" 前缀）
         t0 = time.perf_counter()
         try:
             chunks = semantic_chunk(content)
+            chunks = contextualize_chunks(chunks, name, content)
         except Exception as e:
             logger.exception("semantic_chunk_failed")
             return f"语义切块失败：{e}"
