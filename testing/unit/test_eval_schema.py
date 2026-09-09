@@ -16,7 +16,9 @@ def _write(tmp_path, payload):
 
 def test_load_real_datasets():
     """仓库内真实数据集必须始终合法（CI 防数据集 JSON 腐化）。"""
-    for name in ("rag_v3", "capability_incidents"):
+    names = sorted(f.stem for f in _DATASETS.glob("*.json"))
+    assert {"rag_v3", "capability_incidents", "redteam"} <= set(names)
+    for name in names:
         ds = load_dataset(_DATASETS / f"{name}.json")
         assert ds.cases, name
         assert all(c.scorers for c in ds.cases)
@@ -25,6 +27,9 @@ def test_load_real_datasets():
     assert len(rag.cases) == 15
     inc = load_dataset(_DATASETS / "capability_incidents.json")
     assert len(inc.cases) == 13
+    rt = load_dataset(_DATASETS / "redteam.json")
+    assert len(rt.cases) == 8
+    assert all(c.scenario == "异常" for c in rt.cases)
     assert all(c.origin and c.origin.startswith("incident:") for c in inc.cases)
 
 

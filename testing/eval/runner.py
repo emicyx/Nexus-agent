@@ -49,6 +49,17 @@ class EnvAdapter:
         self.auto_approve = auto_approve  # "approved"/"rejected"：HITL 自动应答，无人值守评测必需
         self._crew_cache: dict[str, int] = {}
 
+    def ingest_document(self, name: str, content: str) -> dict:
+        return self.client.post("/v1/documents",
+                                json={"name": name, "content": content, "source_type": "text"}).json()
+
+    def delete_document(self, name: str) -> bool:
+        for d in self.client.get("/v1/documents").json():
+            if d["name"] == name:
+                self.client.delete(f"/v1/documents/{d['id']}")
+                return True
+        return False
+
     def metrics_today_tokens(self) -> float | None:
         """当日 LLM token 总量（/metrics counter）。试验前后差 = 该次成本。"""
         try:
@@ -158,7 +169,8 @@ def _parse_block(block: str) -> dict:
 
 
 def run_trial(env: EnvAdapter, case_input: dict, crew_name: str | None,
-              timeout: float, collect_db: bool, collect_sandbox: bool) -> RunRecord:
+              timeout: float, collect_db: bool, collect_sandbox: bool,
+              approval_decision: str | None = None) -> RunRecord:
     payload = {
         "message": case_input["message"],
         "session_id": case_input.get("session_id"),
@@ -174,6 +186,7 @@ def run_trial(env: EnvAdapter, case_input: dict, crew_name: str | None,
 
     snap_before: dict = {}
     tok0 = env.metrics_today_tokens()
+    env.auto_approve = approval_decision  # 用例级覆盖（HITL 拒绝后执行类攻击）
     if collect_db:
         try:
             snap_before["db"] = env.db_snapshot()
@@ -306,9 +319,19 @@ def main() -> int:
         for case in d.cases:
             needs_db = any(s.type == "db_assert" for s in case.scorers)
             needs_sb = any(s.type == "sandbox_file" for s in case.scorers)
+            # 红队前置：攻击载荷入库（毒文档），用例结束自动清理（封闭攻击环境）
+            ingested: list[str] = []
+            for doc in (case.pre_state or {}).get("ingest_documents", []):
+                try:
+                    env.ingest_document(doc["name"], doc["content"])
+                    ingested.append(doc["name"])
+                    print(f"    [pre] 攻击语料入库: {doc['name']}")
+                except Exception as e:
+                    print(f"    [pre] 攻击语料入库失败: {e}", file=sys.stderr)
             trials: list[TrialResult] = []
             for i in range(case.effective_trials(n_trials)):
-                record = run_trial(env, case.input, case.crew, args.timeout, needs_db, needs_sb)
+                record = run_trial(env, case.input, case.crew, args.timeout, needs_db, needs_sb,
+                                   approval_decision=case.auto_approve or args.auto_approve)
                 # 原始事件落盘：失败校准的证据链（没有它，断言措辞问题无法诊断）
                 (run_dir / "raw" / f"{case.id}_t{i}.json").write_text(
                     json.dumps(record.events, ensure_ascii=False, indent=1), encoding="utf-8")
@@ -321,6 +344,10 @@ def main() -> int:
             cr = aggregate_case(case.id, d.name, trials)
             case_results.append(cr)
             print(f"[eval] {case.id}: {cr.level}{' 🔁flaky' if cr.flaky else ''} dist={cr.distribution}")
+            if ingested and (case.pre_state or {}).get("cleanup_ingested", True):
+                for n in ingested:
+                    env.delete_document(n)
+                print(f"    [post] 攻击语料已清理: {ingested}")
 
     result = {
         "fingerprint": fp.as_dict(),

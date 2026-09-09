@@ -9,7 +9,8 @@
 testing/eval/
 ├── datasets/                  # 声明式用例（JSON，进 git，版本化）
 │   ├── rag_v3.json            #   知识库问答 15 条（迁移自 eval_rag v2）
-│   └── capability_incidents.json  # 事故回流 12 条（三次线上事故各 4 条）
+│   ├── capability_incidents.json  # 事故回流 13 条（三次线上事故 + 发现固化）
+│   └── redteam.json           # 红队攻防 8 条（注入/沙箱/SSRF/HITL/提示提取，目标=0 绕过）
 ├── scorers/                   # 评分器注册表（纯函数，零依赖）
 ├── schema.py                  # 数据集加载与校验
 ├── aggregate.py               # 四级判定（完全/部分/错误/未完成）+ majority/flaky
