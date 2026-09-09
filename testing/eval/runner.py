@@ -41,10 +41,12 @@ DATASETS_DIR = Path(__file__).resolve().parent / "datasets"
 class EnvAdapter:
     """环境快照采集：评分器只读快照，网络/文件访问全部收敛在这里。"""
 
-    def __init__(self, base_url: str, api_key: str | None, sandbox_dir: Path):
+    def __init__(self, base_url: str, api_key: str | None, sandbox_dir: Path,
+                 auto_approve: str | None = None):
         headers = {"X-API-Key": api_key} if api_key else {}
         self.client = httpx.Client(base_url=base_url, headers=headers, timeout=30)
         self.sandbox_dir = sandbox_dir
+        self.auto_approve = auto_approve  # "approved"/"rejected"：HITL 自动应答，无人值守评测必需
         self._crew_cache: dict[str, int] = {}
 
     def db_snapshot(self) -> dict:
@@ -84,6 +86,28 @@ class EnvAdapter:
                 return c["id"]
         return None
 
+    def _maybe_auto_approve(self, evt: dict) -> None:
+        """HITL 自动应答：approval_requested 事件到达即 POST 决定。
+
+        无人值守评测必需——否则审批 150s 超时会把整条链路拖死
+        （inc-b3 首跑实测）。决定记录进事件流，报告可审计。
+        """
+        if not self.auto_approve or evt.get("type") != "approval_requested":
+            return
+        payload = (evt.get("data") or {}).get("input") or {}
+        approval_id = payload.get("approval_id")
+        if not approval_id:
+            return
+        try:
+            r = self.client.post(f"/v1/approvals/{approval_id}",
+                                 json={"decision": self.auto_approve}, timeout=10)
+            print(f"    [hitl] 自动{self.auto_approve} 审批 {approval_id} → HTTP {r.status_code}")
+            return {"type": "eval_auto_approval", "data": {
+                "approval_id": approval_id, "decision": self.auto_approve, "http": r.status_code}}
+        except Exception as e:
+            print(f"    [hitl] 自动应答失败: {e}")
+            return None
+
     def stream_chat(self, payload: dict, timeout: float) -> tuple[list[dict], float, str | None]:
         """POST /v1/chat/stream，返回 (events, elapsed, error)。"""
         events: list[dict] = []
@@ -96,7 +120,11 @@ class EnvAdapter:
                 for line in resp.iter_lines():
                     if line == "":
                         if block.strip():
-                            events.append(_parse_block(block))
+                            evt = _parse_block(block)
+                            events.append(evt)
+                            note = self._maybe_auto_approve(evt)
+                            if note:
+                                events.append(note)
                         block = ""
                     else:
                         block += line + "\n"
@@ -189,6 +217,9 @@ def main() -> int:
     ap.add_argument("--timeout", type=float, default=300, help="单次 SSE 超时秒")
     ap.add_argument("--diff", default=None, help="与指定 run_id 对比")
     ap.add_argument("--out", default=str(RESULTS_DIR))
+    ap.add_argument("--case", default=None, help="只跑匹配的用例（逗号分隔 id 或子串），校准断言用")
+    ap.add_argument("--auto-approve", choices=["approve", "reject"], default="approve",
+                    help="HITL 审批自动应答（默认 approve；无人值守评测必需）")
     ap.add_argument("--dry-run", action="store_true", help="只校验数据集与评分器装配，不执行")
     args = ap.parse_args()
 
@@ -201,11 +232,22 @@ def main() -> int:
         print("未找到数据集", file=sys.stderr)
         return 2
     datasets: list[Dataset] = [load_dataset(p) for p in paths]
+    if args.case:
+        keys = [k.strip() for k in args.case.split(",")]
+        for d in datasets:
+            d.cases = [c for c in d.cases if any(k in c.id for k in keys)]
+        datasets = [d for d in datasets if d.cases]
+        if not datasets:
+            print(f"--case {args.case} 未匹配任何用例", file=sys.stderr)
+            return 2
     print(f"[eval] 数据集: {[f'{d.name}@{d.version} ({len(d.cases)}条)' for d in datasets]}")
 
-    env = EnvAdapter(args.base_url, args.api_key or None, _REPO / "backend" / "data" / "outputs")
+    env = EnvAdapter(args.base_url, args.api_key or None, _REPO / "backend" / "data" / "outputs",
+                     auto_approve=args.auto_approve)
 
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
+    run_dir = Path(args.out) / run_id
+    (run_dir / "raw").mkdir(parents=True, exist_ok=True)
     cfg_payloads = env.config_payloads()
     fp = RunFingerprint(
         run_id=run_id, git_sha=git_sha(_REPO),
@@ -226,6 +268,9 @@ def main() -> int:
             trials: list[TrialResult] = []
             for i in range(case.effective_trials(n_trials)):
                 record = run_trial(env, case.input, case.crew, args.timeout, needs_db, needs_sb)
+                # 原始事件落盘：失败校准的证据链（没有它，断言措辞问题无法诊断）
+                (run_dir / "raw" / f"{case.id}_t{i}.json").write_text(
+                    json.dumps(record.events, ensure_ascii=False, indent=1), encoding="utf-8")
                 level, scores = score_trial(case, record)
                 trials.append(TrialResult(index=i, level=level, scores=scores,
                                           elapsed=record.elapsed, error=record.error))
@@ -252,9 +297,8 @@ def main() -> int:
     }
 
     out_dir = Path(args.out)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    (out_dir / run_id / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2),
-                                                  encoding="utf-8")
+    (run_dir / "result.json").write_text(json.dumps(result, ensure_ascii=False, indent=2),
+                                         encoding="utf-8")
 
     md = render_report(result)
     if args.diff:
@@ -263,7 +307,7 @@ def main() -> int:
             md += "\n\n" + diff_runs(json.loads(prev_path.read_text(encoding="utf-8")), result)
         else:
             md += f"\n\n（对比目标 {args.diff} 不存在，跳过 diff）"
-    (out_dir / run_id / "report.md").write_text(md, encoding="utf-8")
+    (run_dir / "report.md").write_text(md, encoding="utf-8")
 
     print(f"\n[eval] 完成 → {out_dir / run_id}")
     for dname, d in result["datasets"].items():

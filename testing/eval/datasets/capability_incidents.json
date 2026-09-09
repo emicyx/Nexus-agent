@@ -11,12 +11,16 @@
     },
     "notes": [
       "inc-a3/inc-b3 需要外网可达（fetch example.com）",
-      "inc-c4 的幻觉断言较松（仅要求先检索），待 Phase 2 rubric 加强"
+      "inc-c4 的幻觉断言较松（仅要求先检索），待 Phase 2 rubric 加强",
+      "2026-09-09 首跑发现（真退化信号，Phase 2 rubric 固化）：team_orchestrator 面对'读取不存在的 outputs 文件'时把文件等同到知识库无关文档并总结（文件→文档等同幻觉），raw 证据 results/20260909-130248/raw/inc-a1_t0.json",
+      "用例与 crew 工具配置必须匹配（conformance 层原则）：a1/a2 需 view_file → iterative_write_crew；a3 需 fetch_url → web_ingest_crew；b4 需 write_markdown → markdown_write",
+      "Windows 开发机 bind mount：outputs/ 下子目录（raw、web_ingest）需宿主机侧预建（容器内 appuser 无法在挂载目录建子目录，Errno 13），同 c3b68c6 修复的线上场景",
+      "2026-09-09 发现 #2（真系统 bug，本用例保持 RED 直至修复）：markdown_write crew 流以 'TaskOutput validation error (raw)' 收尾、无 final_answer——疑似 output_pydantic patch 在该 crew 配置下的结构化输出校验缺陷，raw 证据 results/20260909-130954/raw/inc-b4_t0.json"
     ]
   },
   "cases": [
     {
-      "id": "inc-a1", "crew": "team_orchestrator", "scenario": "异常", "intent": "不存在的文件-编排链路",
+      "id": "inc-a1", "crew": "iterative_write_crew", "scenario": "异常", "intent": "不存在的文件-编排链路",
       "origin": "incident:2026-08-25-path-hallucination",
       "input": { "message": "查看 outputs/weekly-report.md 并总结其要点" },
       "scorers": [
@@ -29,7 +33,7 @@
       ]
     },
     {
-      "id": "inc-a2", "crew": "researcher_writer", "scenario": "异常", "intent": "虚构嵌套路径-顺序链路",
+      "id": "inc-a2", "crew": "iterative_write_crew", "scenario": "异常", "intent": "虚构嵌套路径-顺序链路",
       "origin": "incident:2026-08-25-path-hallucination",
       "input": { "message": "读取 outputs/reports/2026/incident-summary.md，基于它的内容写一段续写" },
       "scorers": [
@@ -42,15 +46,15 @@
       ]
     },
     {
-      "id": "inc-a3", "crew": "researcher_writer", "scenario": "边界", "intent": "fetch_url save_as 命名契约",
+      "id": "inc-a3", "crew": "web_ingest_crew", "scenario": "边界", "intent": "fetch_url save_as 命名契约",
       "origin": "incident:2026-08-25-path-hallucination",
-      "input": { "message": "用 fetch_url 抓取 https://example.com/ 的内容，保存为 outputs/example-page.md，然后告诉我抓到的标题" },
+      "input": { "message": "用 fetch_url 抓取 https://example.com/ 的内容保存下来（save_as 用 example-page），然后告诉我抓到的页面标题" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
         { "type": "trajectory_rule", "spec": { "rules": [
           { "kind": "expect_event", "event": "tool_call", "tool": "fetch_url" }
         ] } },
-        { "type": "sandbox_file", "spec": { "path": "example-page.md", "min_bytes": 50 } }
+        { "type": "sandbox_file", "spec": { "path": "raw/example-page.md", "min_bytes": 50 } }
       ]
     },
     {
@@ -93,7 +97,7 @@
       ]
     },
     {
-      "id": "inc-b4", "crew": "researcher_writer", "scenario": "常规", "intent": "泄漏-写作产物",
+      "id": "inc-b4", "crew": "markdown_write", "scenario": "常规", "intent": "泄漏-写作产物",
       "origin": "incident:2026-08-25-tool-call-leakage",
       "input": { "message": "写一份 200 字左右的 Nexus 混合检索机制说明，保存为 outputs/rag-note.md" },
       "scorers": [

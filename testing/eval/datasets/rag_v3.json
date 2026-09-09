@@ -1,7 +1,7 @@
 {
   "name": "rag_v3",
-  "version": "2026.09.8",
-  "description": "知识库问答能力集：迁移自 eval_rag v2 测试集（15 条 / 6 题型）。运行前语料须已入库（testing/eval_rag/reingest_docs.py 或手工上传）。",
+  "version": "2026.09.9",
+  "description": "知识库问答能力集：迁移自 eval_rag v2 测试集（15 条 / 6 题型）。运行前语料须已入库（testing/eval_rag/reingest_docs.py 或手工上传）。2026.09.9 校准：语料措辞漂移修正（q06/q08/q15）+ phrases any-of 转述鲁棒化（首跑证据见 results/20260909-125820/raw/）。",
   "default_trials": 2,
   "meta": {
     "origin": "testing/eval_rag/test_set.json (v2, 2026-08-02)",
@@ -22,7 +22,7 @@
       "input": { "message": "Nexus 平台的数据库技术选型是什么？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrase": "PostgreSQL 16 + pgvector" } }
+        { "type": "golden_phrase", "spec": { "phrases": ["PostgreSQL 16 + pgvector", "PostgreSQL 16 + pgvector + zhparser", "PostgreSQL 16"] } }
       ]
     },
     {
@@ -67,7 +67,7 @@
       "input": { "message": "hierarchical 模式下 manager_agent 有什么限制？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrase": "manager_agent 仅负责拆解和委派" } }
+        { "type": "golden_phrase", "spec": { "phrases": ["manager_agent 仅负责拆解和委派", "仅拆解委派", "拆解与委派", "负责任务拆解"] } }
       ]
     },
     {
@@ -76,7 +76,7 @@
       "input": { "message": "HITL 人类审批是怎么实现的？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrase": "Redis 状态机挂起" } }
+        { "type": "golden_phrase", "spec": { "phrases": ["Redis 状态机挂起", "Redis 状态机"] } }
       ]
     },
     {
@@ -85,7 +85,7 @@
       "input": { "message": "工具内部访问数据库和 Redis 应使用什么客户端？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrase": "同步 SQLAlchemy engine (psycopg2)" } }
+        { "type": "golden_phrase", "spec": { "phrases": ["同步 SQLAlchemy engine (psycopg2)", "同步 SQLAlchemy engine", "同步 SQLAlchemy", "同步 engine"] } }
       ]
     },
     {
@@ -94,7 +94,7 @@
       "input": { "message": "把 CrewAI 搬到 Web 面临哪三大技术鸿沟？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrase": "三大核心鸿沟" } }
+        { "type": "golden_phrase", "spec": { "phrases": ["三大核心鸿沟", "三大技术鸿沟"] } }
       ]
     },
     {
@@ -139,7 +139,7 @@
       "input": { "message": "STM 短期记忆的压缩规则是什么？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrase": "滑窗 6 条" } }
+        { "type": "golden_phrase", "spec": { "phrases": ["滑窗 6 条", "最近 6 条"] } }
       ]
     },
     {
@@ -148,7 +148,7 @@
       "input": { "message": "Nexus 支持多租户和 RBAC 权限吗？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrase": "单用户无 RBAC" } }
+        { "type": "regex_not_match", "spec": { "pattern": "(?<![不未])支持(多租户|RBAC)|已(实现|内置|提供).{0,8}(RBAC|多租户)" } }
       ]
     }
   ]

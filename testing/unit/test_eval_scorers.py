@@ -44,6 +44,17 @@ def test_golden_phrase_pass_partial_fail():
     assert s({}, _rec(DONE)).verdict == "judge_error"
 
 
+def test_golden_phrase_any_of_and_whitespace_normalization():
+    s = REGISTRY["golden_phrase"]
+    # any-of：语料原词与自然转述任一命中即可（2026-09-09 首跑校准）
+    r = s({"phrases": ["滑窗 6 条", "最近 6 条"]}, _rec(DONE, final="滑窗只留最近 6 条消息"))
+    assert r.verdict == "pass" and "最近 6 条" in r.evidence
+    # 空白归一化：回答里插入空格/换行不影响命中（注意不剥标点，"+"需保留）
+    r = s({"phrase": "PostgreSQL 16 + pgvector"}, _rec(DONE, final="选用 PostgreSQL 16 \n+ pgvector 组合"))
+    assert r.verdict == "pass"
+    assert s({"phrases": ["甲", "乙"]}, _rec(DONE, final="无关内容")).verdict == "fail"
+
+
 # ---- pydantic_valid ----
 
 def test_pydantic_valid():

@@ -41,25 +41,36 @@ def sse_contract(spec: dict, run: RunRecord) -> Score:
 
 @register("golden_phrase")
 def golden_phrase(spec: dict, run: RunRecord) -> Score:
-    """黄金短语命中：优先看 final_answer，检索到了但没用上记 partial。
+    """黄金短语命中：any-of 列表 + 空白归一化（回答转述鲁棒）。
 
-    spec: {phrase: str, where?: "final_answer"}
+    spec: {phrase: str} 或 {phrases: [str, ...]}（任一命中即 pass）
+    判定优先级：final_answer 命中 → pass；仅 tool_result 命中 → partial
+    （知识已检索到手、生成层丢失）；均未命中 → fail。
+
+    校准教训（2026-09-09 首跑）：逐字匹配对生成层过于严苛——正确转述
+    （如"滑窗只留最近 6 条" vs 语料"滑窗 6 条"）会被误判。故：
+    ① 比较前剥离全部空白；② 语义等价的自然说法进 phrases 列表。
     """
     name = "golden_phrase"
-    phrase = spec.get("phrase")
-    if not phrase:
-        return Score(name, "judge_error", evidence="spec 缺 phrase")
-    answer = _final_or_empty(run)
-    if phrase in answer:
-        return Score(name, "pass", value=1.0, evidence=f"回答包含黄金短语 {phrase!r}")
+    phrases = spec.get("phrases") or ([spec["phrase"]] if spec.get("phrase") else [])
+    if not phrases:
+        return Score(name, "judge_error", evidence="spec 缺 phrase/phrases")
+
+    def norm(s: str) -> str:
+        return re.sub(r"\s+", "", s or "")
+
+    answer_n, phrases_n = norm(_final_or_empty(run)), [norm(p) for p in phrases]
+    for p_raw, p_n in zip(phrases, phrases_n):
+        if p_n and p_n in answer_n:
+            return Score(name, "pass", value=1.0, evidence=f"回答命中短语 {p_raw!r}（空白归一化后匹配）")
     # 检索命中但回答没用上：知识已到手，生成层丢失 → 部分
     for e in run.events:
         if e.get("type") == "tool_result":
-            out = str((e.get("data") or {}).get("output", ""))
-            if phrase in out:
+            out_n = norm(str((e.get("data") or {}).get("output", "")))
+            if any(p_n and p_n in out_n for p_n in phrases_n):
                 return Score(name, "partial", value=0.5,
-                             evidence=f"短语出现在 tool_result 但 final_answer 未使用（生成层丢失）")
-    return Score(name, "fail", value=0.0, evidence=f"回答与工具结果均未命中 {phrase!r}")
+                             evidence="短语出现在 tool_result 但 final_answer 未使用（生成层丢失）")
+    return Score(name, "fail", value=0.0, evidence=f"回答与工具结果均未命中 {phrases!r}")
 
 
 @register("pydantic_valid")
