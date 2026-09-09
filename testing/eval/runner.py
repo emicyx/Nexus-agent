@@ -49,6 +49,17 @@ class EnvAdapter:
         self.auto_approve = auto_approve  # "approved"/"rejected"：HITL 自动应答，无人值守评测必需
         self._crew_cache: dict[str, int] = {}
 
+    def metrics_today_tokens(self) -> float | None:
+        """当日 LLM token 总量（/metrics counter）。试验前后差 = 该次成本。"""
+        try:
+            text = self.client.get("/metrics").text
+            for line in text.splitlines():
+                if line.startswith("token_usage_today_total"):
+                    return float(line.rsplit(" ", 1)[1])
+        except Exception:
+            return None
+        return None
+
     def db_snapshot(self) -> dict:
         docs = self.client.get("/v1/documents").json()
         return {"documents": [{"id": d["id"], "name": d["name"], "chunk_count": d.get("chunk_count", 0)}
@@ -162,6 +173,7 @@ def run_trial(env: EnvAdapter, case_input: dict, crew_name: str | None,
         payload["crew_id"] = crew_id
 
     snap_before: dict = {}
+    tok0 = env.metrics_today_tokens()
     if collect_db:
         try:
             snap_before["db"] = env.db_snapshot()
@@ -186,7 +198,10 @@ def run_trial(env: EnvAdapter, case_input: dict, crew_name: str | None,
     for e in events:
         if e.get("type") == "final_answer":
             final = (e.get("data") or {}).get("content", "") or ""
-    return RunRecord(events=events, final_answer=final, elapsed=elapsed,
+    tok1 = env.metrics_today_tokens()
+    cost_tokens = round(tok1 - tok0, 1) if (tok0 is not None and tok1 is not None) else None
+    return RunRecord(events=events, final_answer=final, question=str(case_input.get("message", "")),
+                     elapsed=elapsed, cost_tokens=cost_tokens,
                      snapshots={"before": snap_before, "after": snap_after}, error=err)
 
 
@@ -199,11 +214,29 @@ def score_trial(case, record: RunRecord) -> tuple[str, list[Score]]:
         except Exception as e:  # 评分器崩溃 = 评分器故障，绝不记 agent 失败
             scores.append(Score(scorer=ss.type, verdict="judge_error",
                                 evidence=f"{type(e).__name__}: {e}"))
+
+    # cost_gate：以 token 实测对账（成本是一等公民指标）
+    max_tok = (case.cost_gate or {}).get("max_tokens")
+    if max_tok:
+        if record.cost_tokens is None:
+            scores.append(Score("cost_gate", "judge_error",
+                                evidence="token 指标不可得（/metrics 未采集）"))
+        else:
+            ok = record.cost_tokens <= max_tok
+            scores.append(Score("cost_gate", "pass" if ok else "fail", value=1.0 if ok else 0.0,
+                                evidence=f"token {record.cost_tokens:.0f} vs 上限 {max_tok}"))
+
+    # 判定只看 weight>0 的"硬"评分器；weight=0 为软断言（记录进报告，不判败）
+    hard = [s for ss, s in zip(case.scorers, scores) if ss.weight > 0]
+    if max_tok:
+        hard = hard + [scores[-1]]
+    verdict_pool = hard or scores
+
     types = record.event_types()
     sse_ok = bool(types) and types[-1] == "done" and "error" not in types
-    level, _ = derive_trial_level(scores, run_error=record.error,
+    level, _ = derive_trial_level(verdict_pool, run_error=record.error,
                                   has_final_answer=bool(record.final_answer.strip()), sse_ok=sse_ok)
-    if scores and all(s.verdict == "judge_error" for s in scores):
+    if verdict_pool and all(s.verdict == "judge_error" for s in verdict_pool):
         level = "JUDGE_ERROR"  # 伪级别：该试验整体不可判
     return level, scores
 
@@ -218,6 +251,8 @@ def main() -> int:
     ap.add_argument("--diff", default=None, help="与指定 run_id 对比")
     ap.add_argument("--out", default=str(RESULTS_DIR))
     ap.add_argument("--case", default=None, help="只跑匹配的用例（逗号分隔 id 或子串），校准断言用")
+    ap.add_argument("--judge-model", default=None,
+                    help="LLM-judge 模型（缺省 qwen-plus；配 QWEN_API_KEY 即启用 rubric 评分器）")
     ap.add_argument("--auto-approve", choices=["approve", "reject"], default="approve",
                     help="HITL 审批自动应答（默认 approve；无人值守评测必需）")
     ap.add_argument("--dry-run", action="store_true", help="只校验数据集与评分器装配，不执行")
@@ -245,6 +280,11 @@ def main() -> int:
     env = EnvAdapter(args.base_url, args.api_key or None, _REPO / "backend" / "data" / "outputs",
                      auto_approve=args.auto_approve)
 
+    from testing.eval import judge as judge_mod
+    if args.judge_model:
+        judge_mod.DEFAULT_MODEL = args.judge_model
+    judge_tag = f"{judge_mod.DEFAULT_MODEL}@{judge_mod.PROMPT_VERSION}"
+
     run_id = datetime.now().strftime("%Y%m%d-%H%M%S")
     run_dir = Path(args.out) / run_id
     (run_dir / "raw").mkdir(parents=True, exist_ok=True)
@@ -253,6 +293,7 @@ def main() -> int:
         run_id=run_id, git_sha=git_sha(_REPO),
         datasets={f"{d.name}@{d.version}": dataset_fingerprint(d.path) for d in datasets},
         config_snapshot=config_fingerprint_from_payloads(cfg_payloads) if cfg_payloads else None,
+        judge=judge_tag,
         notes=[] if cfg_payloads else ["配置快照未采集（API 不可达或服务未启动）——对比可信度降级"],
     )
     if args.dry_run:
@@ -273,7 +314,8 @@ def main() -> int:
                     json.dumps(record.events, ensure_ascii=False, indent=1), encoding="utf-8")
                 level, scores = score_trial(case, record)
                 trials.append(TrialResult(index=i, level=level, scores=scores,
-                                          elapsed=record.elapsed, error=record.error))
+                                          elapsed=record.elapsed, cost_tokens=record.cost_tokens,
+                                          error=record.error))
                 print(f"  [{case.id}] trial#{i + 1}/{case.effective_trials(n_trials)} → {level}"
                       + (f"（{record.error}）" if record.error else ""))
             cr = aggregate_case(case.id, d.name, trials)
@@ -289,7 +331,8 @@ def main() -> int:
         "cases": [{
             "case_id": r.case_id, "dataset": r.dataset, "level": r.level, "flaky": r.flaky,
             "distribution": r.distribution, "judge_errors": r.judge_errors, "score_value": r.score_value,
-            "trials": [{"index": t.index, "level": t.level, "elapsed": round(t.elapsed, 2), "error": t.error,
+            "trials": [{"index": t.index, "level": t.level, "elapsed": round(t.elapsed, 2),
+                        "cost_tokens": t.cost_tokens, "error": t.error,
                         "scores": [{"scorer": s.scorer, "verdict": s.verdict,
                                     "value": s.value, "evidence": s.evidence} for s in t.scores]}
                        for t in r.trials],

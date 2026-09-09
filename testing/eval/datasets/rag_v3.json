@@ -49,7 +49,8 @@
       "input": { "message": "Nexus 预置了哪几套多 Agent 团队？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrase": "5 套预置多 Agent 团队" } }
+        { "type": "golden_phrase", "weight": 0, "spec": { "phrases": ["5 套预置多 Agent 团队", "5 套"] } },
+        { "type": "llm_rubric", "spec": { "reference": "预置 5 套团队：研究写作（researcher_writer）、知识库问答（knowledge_qa）、安全审查（safety_check/safety_review）、主管编排（team_orchestrator）、网页知识入库（web_ingest_crew）。" } }
       ]
     },
     {
@@ -103,7 +104,8 @@
       "input": { "message": "项目的外部记忆分几层？各层职责是什么？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrase": "三层外部记忆" } }
+        { "type": "golden_phrase", "weight": 0, "spec": { "phrases": ["三层外部记忆", "三层"] } },
+        { "type": "llm_rubric", "spec": { "reference": "三层记忆：L1 STM 会话内上下文（滑动窗口+滚动摘要）；L2 LTM 跨会话用户偏好/事实/经验；L3 KB 知识库高置信预注入。" } }
       ]
     },
     {
@@ -130,7 +132,8 @@
       "input": { "message": "LongTermMemory 的评估延迟从多少优化到了多少？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrase": "9-11s" } }
+        { "type": "golden_phrase", "weight": 0, "spec": { "phrases": ["9-11s", "9-11 秒", "9~11"] } },
+        { "type": "llm_rubric", "spec": { "reference": "LongTermMemory 的 TaskEvaluator 评估延迟从同步 9-11 秒优化到异步 + 独立小模型（qwen-turbo）的 1-2 秒。" } }
       ]
     },
     {

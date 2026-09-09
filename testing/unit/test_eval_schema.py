@@ -24,7 +24,7 @@ def test_load_real_datasets():
     rag = load_dataset(_DATASETS / "rag_v3.json")
     assert len(rag.cases) == 15
     inc = load_dataset(_DATASETS / "capability_incidents.json")
-    assert len(inc.cases) == 12
+    assert len(inc.cases) == 13
     assert all(c.origin and c.origin.startswith("incident:") for c in inc.cases)
 
 

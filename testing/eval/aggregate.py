@@ -47,6 +47,7 @@ class TrialResult:
     level: str                       # LEVELS 之一
     scores: list[Score] = field(default_factory=list)
     elapsed: float = 0.0
+    cost_tokens: float | None = None  # 该试验 token 消耗（/metrics 差值）
     error: str | None = None         # 环境层错误原文
 
 

@@ -36,16 +36,18 @@ def render_report(result: dict) -> str:
         lines.append("")
         lines.append(f"> {render_summary_line(s)}　flaky: {len(s.get('flaky', []))}　评分器故障: {s.get('judge_errors', 0)}")
         lines.append("")
-        lines.append("| 用例 | 判定 | 分布 | 评分器故障 | 耗时(s) |")
-        lines.append("|---|---|---|---|---|")
+        lines.append("| 用例 | 判定 | 分布 | 评分器故障 | 耗时(s) | token |")
+        lines.append("|---|---|---|---|---|---|")
         for c in result.get("cases", []):
             if c.get("dataset") != dname:
                 continue
             dist = "/".join(f"{lv}×{n}" for lv in _ORDER if (n := c.get("distribution", {}).get(lv)))
             elapsed = [t.get("elapsed", 0) for t in c.get("trials", [])]
+            toks = [t.get("cost_tokens") for t in c.get("trials", []) if t.get("cost_tokens") is not None]
+            tok_s = f"{sum(toks) / len(toks):,.0f}" if toks else "-"
             lines.append(f"| {c['case_id']} | {c['level']}{' 🔁' if c.get('flaky') else ''} "
                          f"| {dist} | {c.get('judge_errors', 0)} "
-                         f"| {max(elapsed) if elapsed else 0:.1f} |")
+                         f"| {max(elapsed) if elapsed else 0:.1f} | {tok_s} |")
         lines.append("")
 
     fails = [c for c in result.get("cases", []) if c.get("level") != "完全"]

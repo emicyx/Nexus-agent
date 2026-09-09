@@ -10,9 +10,10 @@
 """
 from testing.eval.scorers.base import REGISTRY, RunRecord, Score, register
 from testing.eval.scorers.contract import db_assert, golden_phrase, pydantic_valid, regex_not_match, sandbox_file
+from testing.eval.scorers.rubric import llm_rubric
 from testing.eval.scorers.trajectory import trajectory_rule
 
 # 触发注册（import 副作用）
-_ = (db_assert, golden_phrase, pydantic_valid, regex_not_match, sandbox_file, trajectory_rule)
+_ = (db_assert, golden_phrase, pydantic_valid, regex_not_match, sandbox_file, trajectory_rule, llm_rubric)
 
 __all__ = ["REGISTRY", "RunRecord", "Score", "register"]

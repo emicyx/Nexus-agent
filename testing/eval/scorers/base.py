@@ -21,7 +21,9 @@ class RunRecord:
 
     events: SSE 事件列表 [{type, data}]
     final_answer: final_answer 事件内容（无则空串）
+    question: 该试验的用户问题（llm_rubric 等 judge 类评分器需要）
     elapsed: 端到端耗时秒
+    cost_tokens: 该试验 token 消耗（/metrics today_total 前后差，不可得为 None）
     snapshots: {"before": {...}, "after": {...}}，键约定：
         db      -> {"documents": [{id, name, chunk_count?}]}
         sandbox -> {"files": [{path, size}]}
@@ -30,7 +32,9 @@ class RunRecord:
 
     events: list[dict] = field(default_factory=list)
     final_answer: str = ""
+    question: str = ""
     elapsed: float = 0.0
+    cost_tokens: float | None = None
     snapshots: dict[str, dict[str, Any]] = field(default_factory=dict)
     error: str | None = None
 

@@ -37,6 +37,7 @@ class RunFingerprint:
     git_sha: str
     datasets: dict[str, str] = field(default_factory=dict)     # name@version -> 哈希
     config_snapshot: str | None = None                          # 配置 API 哈希；None=未采集
+    judge: str | None = None                                    # "qwen-plus@rubric-v1"；None=未启用
     notes: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict:
@@ -45,6 +46,7 @@ class RunFingerprint:
             "git_sha": self.git_sha,
             "datasets": self.datasets,
             "config_snapshot": self.config_snapshot,
+            "judge": self.judge,
             "notes": self.notes,
         }
 

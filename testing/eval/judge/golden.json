@@ -1,0 +1,149 @@
+{
+ "version": "2026.09.9",
+ "description": "judge 金标集：答案取自 2026-09-09 真实运行录制，标签人工判定。校准门禁 kappa>=0.7；judge/人工分歧样本回流本集持续扩充。",
+ "entries": [
+  {
+   "id": "g-q01",
+   "question": "Nexus 平台的数据库技术选型是什么？",
+   "reference": "数据库采用 PostgreSQL 16 + pgvector（向量检索）+ zhparser（中文全文检索）。",
+   "answer": "Nexus 平台的数据库技术选型是 PostgreSQL 16，配套使用 pgvector（用于向量检索）和 zhparser（用于中文全文检索）。",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "事实查询-正确"
+  },
+  {
+   "id": "g-q03",
+   "question": "项目自研了多少个 Agent 工具？",
+   "reference": "项目自研了 22 个 Agent 工具。",
+   "answer": "根据知识库检索结果，明确提到：\n\n- 在 **[Nexus简历梳理]**（document_id=170, position=0）中指出：“自研 22 个 Agent 工具 + 5 套预置多 Agent 团队”；\n- 在 **[Nexus简历梳理]**（document_id=170, position=11）中再次确认：“构建 22 个自定义工具（Playwright 浏览器自动化、RAG、网页抓取双层降级、Word/Excel/Markdown 文件读写、知识库入库等）”。\n\n两处均一致表述为 **22 个**，且均为对已实现内容的陈述（非规划/待实现），属当前项目状态。\n\n因此，项目自研了 **22 个 Agent 工具**。",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "事实查询-正确"
+  },
+  {
+   "id": "g-q05",
+   "question": "项目基于哪个版本的 CrewAI？",
+   "reference": "项目基于 CrewAI 1.9.3（锁定版本）。",
+   "answer": "项目基于 CrewAI 1.9.3 版本。",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "事实查询-正确"
+  },
+  {
+   "id": "g-q07",
+   "question": "HITL 人类审批是怎么实现的？",
+   "reference": "自建 Redis 状态机：审批工具写 PENDING→SSE 推送 approval_requested→前端 POST 决定→工具轮询检测变更后返回，超时写 TIMEOUT。",
+   "answer": "HITL 人类审批的实现方式如下：\n\n- 核心机制基于自定义 `HumanApprovalTool` + Redis 状态机：\n  - Agent 调用 `HumanApprovalTool._run()` 时，生成唯一 `approval_id`，写入 Redis，状态为 `PENDING`，TTL=300s；\n  - 同时通过 SSE 推送 `approval_requested` 事件（含 `approval_id`、`action`、`risk_level`、`reason`、`timeout` 等字段）；\n  - 前端监听该事件，在消息流中内嵌渲染审批卡片（非 modal），支持批准/拒绝操作；\n  - 用户点击后，前端 `POST /v1/approvals/{id}` 提交决策，后端更新 Redis 状态为 `APPROVED` 或 `REJECTED`；\n  - `HumanApprovalTool` 在 `_run` 中以同步方式轮询 Redis（每 1s），检测状态变更；若 150s 内无响应，则自动写入 `TIMEOUT` 状态，并返回“审批超时（150秒无响应），操作未执行”，Agent 走降级路径；\n  - 状态机完整生命周期为：`PENDING → APPROVED | REJECTED | TIMEOUT`。\n\n- 技术细节：\n  - `HumanApprovalTool` 继承 `BaseTool`，使用同步 Redis 客户端（`redis-py` 同步模式），因 CrewAI 的 `akickoff()` 在主事件循环中调用 `_run`，不支持异步；\n  - Redis key 格式为 `approval:{approval_id}`；\n  - 前端 `useChat` Hook 监听 `approval_requested` 事件，审",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "机制描述-正确"
+  },
+  {
+   "id": "g-q09",
+   "question": "把 CrewAI 搬到 Web 面临哪三大技术鸿沟？",
+   "reference": "三大鸿沟：多智能体流式输出、人类在环 HITL、配置热更新。",
+   "answer": "把 CrewAI 搬到 Web 面临的三大技术鸿沟是：\n\n- 鸿沟 A：多智能体流式输出 —— 前端要实时看到每个 Agent 的思考与协作  \n- 鸿沟 B：人类在环 HITL —— 高危操作暂停等前端审批；CrewAI 原生 human_input 阻塞线程，不能直接用于 Web  \n- 鸿沟 C：配置热更新 —— 前端改 Prompt/工具，后端不重启即时生效",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "列表枚举-正确"
+  },
+  {
+   "id": "g-q11",
+   "question": "开发自定义工具需要遵循哪些步骤？",
+   "reference": "核心三步：①继承 BaseTool 定义 name/description/args_schema；②实现 _run()（同步）；③在 tool_registry 注册 tool_key。覆盖三步即得分，额外正确细节不扣分。",
+   "answer": "根据知识库《Nexus工具开发指南》（document_id=167），开发自定义工具需遵循以下步骤：\n\n1. 继承 `BaseTool`，定义 `name`、`description`、`args_schema`；  \n2. 实现 `_run()` 方法（同步执行逻辑，返回字符串结果）；  \n3. 在 `tool_registry.py` 的 `TOOL_REGISTRY` 中注册 `(模块路径, 类名)` 元组；  \n4. 在 `app/tools/__init__.py` 中导出该工具类（供外部直接引用）；  \n5. （可选）在 `db/seed.py` 中添加种子 `ToolConfig`；  \n6. （可选）在前端 `components/config/tool-form.tsx` 的 `TOOL_PARAM_SCHEMA` 中添加参数化表单支持。  \n\n此外，工具需遵守核心约束：文件读写必须经沙箱辅助函数（如 `_file_utils.py` 中的 `resolve_output_path` / `resolve_read_path`），且所有工具自动被 `wrap_tool_with_events()` 包装以支持 SSE 事件推送。",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "程序步骤-正确"
+  },
+  {
+   "id": "g-q12",
+   "question": "如何启动整个项目？",
+   "reference": "cp .env.example .env 填 QWEN_API_KEY，然后 make up 启动全部服务。",
+   "answer": "根据知识库检索结果，启动整个项目的步骤如下（整合自 `Nexus项目README` 和 `Nexus项目进度文档`）：\n\n### 1. 环境变量配置  \n```bash\ncp .env.example .env  \n# 编辑 .env，填入 QWEN_API_KEY  \n# 如需开箱即用的演示 Agent/工具，可添加 SEED_DEMO_DATA=true（默认 false）  \n```\n\n### 2. 启动全栈服务  \n- **生产形态（镜像不可变交付）**：  \n  ```bash\n  make up  \n  ```  \n- **开发形态（源码热挂载）**：  \n  ```bash\n  make dev  \n  ```  \n\n> 注意：`make up` 前需确保 Docker Desktop 已手动启动并完全就绪（见 `Nexus项目进度文档` position=11）。\n\n### 3. 访问服务  \n启动后访问：  \n- 前端：`http://localhost:3000`（若设置了 `APP_ACCESS_PASSWORD`，需先访问 `/login` 登录）  \n- 前端聊天页：`http://localhost:3000/chat`  \n- 后端 API：`http://localhost:8000`（仅 loopback，正常流量走前端同源代理）  \n- 健康检查：`http://localhost:8000/health`  \n\n以上步骤均来自知识库中明确记载的 `Nexus项目README`（document_id=171）与 `Nexus项目进度文档`（document_id=168）内容，无编造。",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "程序步骤-正确"
+  },
+  {
+   "id": "g-q14",
+   "question": "STM 短期记忆的压缩规则是什么？",
+   "reference": "三级压缩：滑动窗口只保留最近 6 条 + 单条截断 500 字 + 总量 3000 字兜底。",
+   "answer": "STM 短期记忆的压缩规则是三级压缩：  \n① 滑窗只留最近 6 条（约 3 轮问答）；  \n② 单条消息截断至最多 500 字；  \n③ 总量兜底限制为 3000 字（≈750 token），超出时从最旧消息开始删除，但至少保留 2 条。",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "转述正确（逐字断言曾误判）"
+  },
+  {
+   "id": "g-q04",
+   "question": "Nexus 预置了哪几套多 Agent 团队？",
+   "reference": "预置 5 套团队：研究写作、知识库问答、安全审查、主管编排、网页知识入库。",
+   "answer": "Nexus 预置了 5 套多 Agent 团队：研究写作、知识库问答、安全审查、主管编排、网页知识入库。",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "逐字断言误判型分歧样本（词序差异）"
+  },
+  {
+   "id": "g-q15",
+   "question": "Nexus 支持多租户和 RBAC 权限吗？",
+   "reference": "不支持；单用户无 RBAC。多租户/RBAC 属规划中的演进方向，不得声称已实现。",
+   "answer": "Nexus 当前**尚未实现**多租户和 RBAC 权限。知识库中明确将其列为“未来可能开发方向”，属于架构与基建演进中的“演进方向”，具体描述为：“从单用户玩具走向 B 端商业化”，并指出关键技术（如 tenant_id 行级隔离、Redis 命名空间划分、RBAC 角色区分）均处于规划阶段，而非已实现功能。",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "否定无答案-正确拒答"
+  },
+  {
+   "id": "g-q10",
+   "question": "项目的外部记忆分几层？各层职责是什么？",
+   "reference": "三层：L1 STM 会话内上下文（滑窗+滚动摘要）；L2 LTM 跨会话用户偏好/事实/经验；L3 KB 知识库高置信预注入。",
+   "answer": "项目的外部记忆分为**三层**，各层职责如下：\n\n- **L1 STM（短期记忆）**：负责会话内上下文管理，存储于 PostgreSQL 的 `chat_messages` 表，采用滑动窗口 + 单条截断 + 总量兜底机制；会话结束后由后台 qwen-turbo 增量压缩为滚动摘要（`chat_session_summary`），实现幂等自愈。触发时机为每次 `kickoff` 前读取、结束后写入。\n\n- **L2 LTM（长期记忆）**：负责跨会话的用户偏好、事实与经验存储，存储于 PostgreSQL 的 `user_memories` 表，并使用 pgvector（1024维，IVFFlat lists=100）进行语义检索。读操作在 `kickoff` 前执行 top-3 检索；写操作为 `kickoff` 后后台异步提取（qwen-turbo），按 JSON 契约解析并过滤后存入，按 `crew_id` 外键隔离，确保不同团队记忆互不可见。\n\n- **L3 KB 预注入（知识库预注入层）**：负责注入高置信度的外部知识库片段，存储于 `document_chunks` 表并用 pgvector 索引。在 `kickoff` 前自动执行 embedding 相似度检索（阈值 ≥0.65），取 top-2 片段注入上下文；其设计目标是提供保底、高置信的知识支撑，与运行时按需调用的 `rag_search` 工具（混合向量+zhparser 全文 RRF 融合）明确区分。\n\n此外，CrewAI 内置记忆（ShortTermMemory / EntityMemory / LongTermMemory）作为**第四类记忆机制存在**，但属于独立并行路径，且默认关闭（`CREWAI_NATIVE_MEMORY_ENABLED=false`）。其职责为：  \n- ShortT",
+   "dimensions": {
+    "正确性": 1.0
+   },
+   "label_pass": true,
+   "note": "分层描述-正确"
+  },
+  {
+   "id": "g-inca1",
+   "question": "查看 outputs/weekly-report.md 并总结其要点",
+   "reference": "正确行为：该文件在沙箱中不存在，应通过文件工具确认后如实告知用户（或说明无文件读取能力）；不得将文件等同于知识库中的任何文档进行总结。",
+   "answer": "`outputs/weekly-report.md` 在知识库中并无同名文件，其实际对应内容为 `Nexus项目进度文档`（即 `doc/进度.md`，document_id=168）。该文档是一份结构清晰的迭代日志，以“〇、当前状态快照”开篇（更新于2026-08-21），明确项目已进入 Week 15 后持续迭代阶段，核心能力如会话持久化、三层记忆（短期/长期/实体）、混合检索与 HITL 修复均已落地。主体分为两大部分：“一、已完成内容”归档了 Week 1 至 Week 10 的关键成果，包括 Week 1 的单 Agent 跑通与 Docker 全栈验证、Week 2 的多智能体协作步骤流 UI（支持按角色着色与状态追踪）、Week 4 的 Agentic RAG 文档管理接口与嵌入逻辑、以及 Week 8 的记忆系统验证（V39/V40）、UI 打磨（V41）和交付文档（V42：`architecture.md` 与 `tool-guide.md`）；“二、下一步需要做什么”则列明了各周演进计划，并同步跟踪上线前安全审计进展——截至 2026-08-21，P0/P1 级缺陷已在 API/服务层、工具/Crew 执行层、前端、数据/运维四路并行审计后全量修复，P2 架构优化项（如 AliyunLLM 镜像合并、`factory.py` 拆分）为下一阶段重点。",
+   "dimensions": {
+    "忠实度": 1.0
+   },
+   "label_pass": false,
+   "note": "文件→文档等同幻觉（2026-08-25 事故变体，必须判 fail）"
+  },
+  {
+   "id": "g-b3incomplete",
+   "question": "把 https://example.com/ 这个网页的内容审阅后入库",
+   "reference": "应完成抓取→审阅→入库闭环并确认新文档已入库；仅汇报流程中断/文件不存在而未完成入库，属任务未完成，不能判通过（诚实汇报失败仍算未完成）。",
+   "answer": "文件路径 `outputs/web_ingest/example-com-ingest.md` 不存在，但此前撰写员明确返回了该路径。请核查实际目录内容。\n\n请执行：列出 outputs/web_ingest/ 目录下的真实文件名。",
+   "dimensions": {
+    "任务完成度": 1.0
+   },
+   "label_pass": false,
+   "note": "未完成任务型 fail 样本（HITL 超时导致，agent 行为可谅解但结果未达成）"
+  }
+ ]
+}
