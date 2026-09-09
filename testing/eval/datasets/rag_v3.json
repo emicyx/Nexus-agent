@@ -1,0 +1,155 @@
+{
+  "name": "rag_v3",
+  "version": "2026.09.8",
+  "description": "知识库问答能力集：迁移自 eval_rag v2 测试集（15 条 / 6 题型）。运行前语料须已入库（testing/eval_rag/reingest_docs.py 或手工上传）。",
+  "default_trials": 2,
+  "meta": {
+    "origin": "testing/eval_rag/test_set.json (v2, 2026-08-02)",
+    "corpus": [
+      { "file": "doc/architecture.md", "name": "Nexus架构白皮书", "source_type": "text" },
+      { "file": "doc/tool-guide.md", "name": "Nexus工具开发指南", "source_type": "text" },
+      { "file": "doc/进度.md", "name": "Nexus项目进度文档", "source_type": "text" },
+      { "file": "doc/设计文档.txt", "name": "Nexus设计文档", "source_type": "text" },
+      { "file": "doc/简历项目梳理-Nexus.md", "name": "Nexus简历梳理", "source_type": "text" },
+      { "file": "README.md", "name": "Nexus项目README", "source_type": "text" }
+    ],
+    "note": "黄金短语取语料逐字子串，与切块方案解耦；q15 为否定/无答案类，专测幻觉"
+  },
+  "cases": [
+    {
+      "id": "q01", "crew": "knowledge_qa", "scenario": "常规", "intent": "事实查询",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "Nexus 平台的数据库技术选型是什么？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "PostgreSQL 16 + pgvector" } }
+      ]
+    },
+    {
+      "id": "q02", "crew": "knowledge_qa", "scenario": "常规", "intent": "事实查询",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "Nexus 后端的代码规模有多大？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "81 个 Python 文件" } }
+      ]
+    },
+    {
+      "id": "q03", "crew": "knowledge_qa", "scenario": "常规", "intent": "事实查询",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "项目自研了多少个 Agent 工具？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "22 个 Agent 工具" } }
+      ]
+    },
+    {
+      "id": "q04", "crew": "knowledge_qa", "scenario": "常规", "intent": "列表枚举",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "Nexus 预置了哪几套多 Agent 团队？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "5 套预置多 Agent 团队" } }
+      ]
+    },
+    {
+      "id": "q05", "crew": "knowledge_qa", "scenario": "常规", "intent": "事实查询",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "项目基于哪个版本的 CrewAI？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "CrewAI 1.9.3" } }
+      ]
+    },
+    {
+      "id": "q06", "crew": "knowledge_qa", "scenario": "常规", "intent": "定义机制",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "hierarchical 模式下 manager_agent 有什么限制？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "manager_agent 仅负责拆解和委派" } }
+      ]
+    },
+    {
+      "id": "q07", "crew": "knowledge_qa", "scenario": "常规", "intent": "定义机制",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "HITL 人类审批是怎么实现的？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "Redis 状态机挂起" } }
+      ]
+    },
+    {
+      "id": "q08", "crew": "knowledge_qa", "scenario": "常规", "intent": "定义机制",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "工具内部访问数据库和 Redis 应使用什么客户端？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "同步 SQLAlchemy engine (psycopg2)" } }
+      ]
+    },
+    {
+      "id": "q09", "crew": "knowledge_qa", "scenario": "常规", "intent": "列表枚举",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "把 CrewAI 搬到 Web 面临哪三大技术鸿沟？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "三大核心鸿沟" } }
+      ]
+    },
+    {
+      "id": "q10", "crew": "knowledge_qa", "scenario": "常规", "intent": "定义机制",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "项目的外部记忆分几层？各层职责是什么？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "三层外部记忆" } }
+      ]
+    },
+    {
+      "id": "q11", "crew": "knowledge_qa", "scenario": "常规", "intent": "程序步骤",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "开发自定义工具需要遵循哪些步骤？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "继承 `BaseTool`" } }
+      ]
+    },
+    {
+      "id": "q12", "crew": "knowledge_qa", "scenario": "常规", "intent": "程序步骤",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "如何启动整个项目？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "make up" } }
+      ]
+    },
+    {
+      "id": "q13", "crew": "knowledge_qa", "scenario": "常规", "intent": "性能事实",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "LongTermMemory 的评估延迟从多少优化到了多少？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "9-11s" } }
+      ]
+    },
+    {
+      "id": "q14", "crew": "knowledge_qa", "scenario": "常规", "intent": "性能事实",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "STM 短期记忆的压缩规则是什么？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "滑窗 6 条" } }
+      ]
+    },
+    {
+      "id": "q15", "crew": "knowledge_qa", "scenario": "边界", "intent": "否定无答案",
+      "origin": "corpus:eval_rag-v2",
+      "input": { "message": "Nexus 支持多租户和 RBAC 权限吗？" },
+      "scorers": [
+        { "type": "sse_contract", "spec": {} },
+        { "type": "golden_phrase", "spec": { "phrase": "单用户无 RBAC" } }
+      ]
+    }
+  ]
+}

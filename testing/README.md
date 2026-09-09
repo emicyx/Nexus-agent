@@ -12,16 +12,26 @@ testing/
 ├── REVIEW_REPORT.md     # 评审报告（11 维度评分模板）
 ├── unit/                # Tier 1 纯逻辑单测（无需 DB/网络，零 LLM 成本）
 ├── integration/         # Tier 2 API 集成测试（Docker PG+Redis，Mock LLM）
-└── e2e/                 # Tier 3 真实 E2E smoke（真实 QWEN_API_KEY）
+├── e2e/                 # Tier 3 真实 E2E smoke（真实 QWEN_API_KEY）
+├── eval/                # Tier 4 能力评测 harness（声明式数据集+评分器+报告）
+└── eval_rag/            # 旧版 RAG 专项评估（被 eval/ 逐步取代）
 ```
 
-## 三层测试概览
+## 四层测试概览
 
 | 层级 | 测什么 | 依赖 | 成本 | 目标 |
 |---|---|---|---|---|
 | Tier 1 `unit/` | 纯函数：SSE 格式、记忆压缩、工具注册、DSN、切块、多模态归一化、HITL 状态机 | 无（仅 Python 标准库 + backend 模块） | 零 | 逻辑正确性 |
 | Tier 2 `integration/` | 全部 REST 端点 CRUD + 校验 + SSE 事件序列 | Docker PG+Redis；LLM 被 Mock | 零 | 系统可用性 |
 | Tier 3 `e2e/` | 6 条真实主流程闭环（对话/RAG/HITL/hierarchical/热更新/入库） | Docker 全栈 + 真实 `QWEN_API_KEY` | 花钱/慢 | 简历亮点可复现 |
+| Tier 4 `eval/` | 能力评测：RAG 问答 15 条 + 事故回流 12 条，四级判定 + TSR + 可 diff 报告 | 同 Tier 3（离线跑，非 CI） | 花钱 | 度量"变好还是变坏" |
+
+Tier 1-3 在 CI（`.github/workflows/ci.yml`）自动执行；Tier 4 用法见
+[eval/README.md](./eval/README.md)：
+```bash
+python testing/eval/runner.py --dry-run      # 校验数据集装配
+python testing/eval/runner.py                # 全量评测（指纹+报告+diff）
+```
 
 ## 快速开始
 

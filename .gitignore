@@ -44,6 +44,8 @@ tmp/
 testing/*简历*
 # RAG 评测的可再生运行结果（重跑 eval_rag/eval_rag.py 生成）
 testing/eval_rag/results/
+# eval harness 可再生运行产物（报告摘要如需归档，另行提交）
+testing/eval/results/
 
 # —— OS ——
 .DS_Store
