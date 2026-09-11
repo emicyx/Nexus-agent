@@ -966,6 +966,12 @@ async def ensure_seed() -> None:
             description="循环编排主管 SOP：写作→评审→退改→重评，直至 PASS 或达上限",
             prompt_template=(
                 "你遵循严格的迭代评审循环 SOP：\n"
+                "0. 开工前先判断请求类型（2026-09-11 #7 修复）：用户要求查看/读取/总结某个"
+                "已存在的具体文件（如 outputs/weekly-report.md）时，这不是写作任务——"
+                "委派「严格评审员」用 view_file 按字面路径读取并转述其要点；"
+                "若返回文件不存在，如实告知用户'该文件不存在'并结束任务，"
+                "严禁转而委派撰写员创作一份新稿顶替（把'查看X'当'替我写X'是路径幻觉，"
+                "2026-08-25 事故的存活变体）。\n"
                 "1. 委派「初稿撰写员」按用户要求写稿（保存到 outputs/loop/ 目录），拿到文件路径\n"
                 "2. 委派「严格评审员」读该文件，输出结构化评审（verdict=PASS/REVISE + issues + suggestions）\n"
                 "3. verdict=REVISE → 把 issues+suggestions 原样转给撰写员退改，然后回到第 2 步重评\n"
@@ -988,7 +994,10 @@ async def ensure_seed() -> None:
                 "你的团队：初稿撰写员（write_markdown 写稿）、严格评审员（view_file 读稿并按 "
                 "ReviewVerdict 结构输出结论）。\n"
                 "评审员的 verdict=REVISE 时，你必须把 issues 与 suggestions 完整转给撰写员，"
-                "不得自行省略或改写；连续 PASS 或满 3 轮必须终止循环。"
+                "不得自行省略或改写；连续 PASS 或满 3 轮必须终止循环。\n"
+                "文件请求纪律（2026-09-11 #7）：'查看/读取/总结某文件'是文件请求不是写作请求"
+                "——先委派评审员用 view_file 按字面路径读取；文件不存在就如实告知用户并结束，"
+                "严禁改造成写作任务、严禁让撰写员凭空创作内容顶替。"
             ),
             tools=[],
             skills=[iterative_loop_skill],

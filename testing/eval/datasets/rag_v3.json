@@ -1,7 +1,7 @@
 {
   "name": "rag_v3",
-  "version": "2026.09.9",
-  "description": "知识库问答能力集：迁移自 eval_rag v2 测试集（15 条 / 6 题型）。运行前语料须已入库（testing/eval_rag/reingest_docs.py 或手工上传）。2026.09.9 校准：语料措辞漂移修正（q06/q08/q15）+ phrases any-of 转述鲁棒化（首跑证据见 results/20260909-125820/raw/）。",
+  "version": "2026.09.11",
+  "description": "知识库问答能力集：迁移自 eval_rag v2 测试集（15 条 / 6 题型）。运行前语料须已入库（testing/eval_rag/reingest_docs.py 或手工上传）。2026.09.9 校准：语料措辞漂移修正（q06/q08/q15）+ phrases any-of 转述鲁棒化。2026.09.11 校准：q08 补词序变体（'psycopg2 同步/同步引擎/get_sync_redis'，来源归属 prompt 改变答案措辞结构）；q15 regex 降 weight 0 + llm_rubric 接管（regex 对'无任何内容表明…已实现'这类合法否定语境天然脆弱，复跑实录）。",
   "default_trials": 2,
   "meta": {
     "origin": "testing/eval_rag/test_set.json (v2, 2026-08-02)",
@@ -86,7 +86,7 @@
       "input": { "message": "工具内部访问数据库和 Redis 应使用什么客户端？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "golden_phrase", "spec": { "phrases": ["同步 SQLAlchemy engine (psycopg2)", "同步 SQLAlchemy engine", "同步 SQLAlchemy", "同步 engine"] } }
+        { "type": "golden_phrase", "spec": { "phrases": ["同步 SQLAlchemy engine (psycopg2)", "同步 SQLAlchemy engine", "同步 SQLAlchemy", "同步 engine", "psycopg2 同步", "同步引擎", "get_sync_redis"] } }
       ]
     },
     {
@@ -151,7 +151,8 @@
       "input": { "message": "Nexus 支持多租户和 RBAC 权限吗？" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
-        { "type": "regex_not_match", "spec": { "pattern": "(?<![不未])支持(多租户|RBAC)|已(实现|内置|提供).{0,8}(RBAC|多租户)" } }
+        { "type": "regex_not_match", "weight": 0, "spec": { "pattern": "(?<![不未])支持(多租户|RBAC)|已(实现|内置|提供).{0,8}(RBAC|多租户)" } },
+        { "type": "llm_rubric", "spec": { "reference": "Nexus 当前不支持多租户和 RBAC 权限，两者属于未来演进方向/规划中的能力（README 明确'已知的单租户边界'，设计文档将多租户与 RBAC 列为'未来可能开发方向'）。正确回答必须明确'当前不支持/未实现'，可补充说明规划内容；把否定表述（如'无任何内容表明已实现'）中的字面命中不算违规。" } }
       ]
     }
   ]

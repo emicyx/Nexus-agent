@@ -79,3 +79,57 @@ def test_effective_trials_fallback(tmp_path):
     ds = load_dataset(p)
     assert ds.cases[0].effective_trials(ds.default_trials) == 2
     assert ds.cases[1].effective_trials(ds.default_trials) == 5
+
+
+def _case(cid, **kw):
+    base = {"id": cid, "input": {"message": "hi"}, "scorers": [{"type": "sse_contract", "spec": {}}]}
+    base.update(kw)
+    return base
+
+
+def test_dataset_level_pre_state_defaults_and_case_override(tmp_path):
+    """#8：数据集级 pre_state 为默认值，用例级按键覆盖（redteam 全组封闭环境只声明一次）。"""
+    p = _write(tmp_path, {"name": "x",
+                          "pre_state": {"clean_sandbox": True, "cleanup_new_documents": True},
+                          "cases": [
+                              _case("c1"),
+                              _case("c2", pre_state={"clean_sandbox": False,
+                                                     "ingest_documents": [{"name": "n", "content": "c"}]}),
+                          ]})
+    ds = load_dataset(p)
+    assert ds.cases[0].pre_state == {"clean_sandbox": True, "cleanup_new_documents": True}
+    # 用例级按键覆盖：clean_sandbox 被关掉，数据集级 cleanup_new_documents 保留，私有键合入
+    assert ds.cases[1].pre_state == {"clean_sandbox": False, "cleanup_new_documents": True,
+                                     "ingest_documents": [{"name": "n", "content": "c"}]}
+
+
+def test_pre_state_type_validation(tmp_path):
+    p = _write(tmp_path, {"name": "x", "pre_state": ["not", "a", "dict"], "cases": [_case("c1")]})
+    with pytest.raises(SchemaError, match="数据集级 pre_state"):
+        load_dataset(p)
+    p = _write(tmp_path, {"name": "x", "cases": [_case("c1", pre_state="oops")]})
+    with pytest.raises(SchemaError, match="pre_state"):
+        load_dataset(p)
+
+
+def test_real_datasets_pre_state_wiring():
+    """真实数据集：redteam 全组封闭环境默认 + inc-a3 用例级清理（#8 落地核验）。"""
+    rt = load_dataset(_DATASETS / "redteam.json")
+    assert all(c.pre_state and c.pre_state.get("clean_sandbox")
+               and c.pre_state.get("cleanup_new_documents") for c in rt.cases)
+    # rt-1/rt-2 用例级毒文档与数据集级默认合并共存
+    rt1 = next(c for c in rt.cases if c.id.startswith("rt-1"))
+    assert rt1.pre_state["ingest_documents"]
+    # #9：rt-4 硬门禁锚沙箱外 ../escape.md，沙箱内合规位置降 weight 0
+    rt4 = next(c for c in rt.cases if c.id.startswith("rt-4"))
+    sb = [(s.spec.get("path"), s.weight) for s in rt4.scorers if s.type == "sandbox_file"]
+    assert ("../escape.md", 1.0) in sb and ("escape.md", 0.0) in sb
+    inc = load_dataset(_DATASETS / "capability_incidents.json")
+    a3 = next(c for c in inc.cases if c.id == "inc-a3")
+    assert a3.pre_state == {"clean_sandbox": True, "cleanup_new_documents": True}
+    # 其余 capability 用例不受数据集级默认影响（无该键声明）
+    assert all(c.pre_state is None for c in inc.cases if c.id != "inc-a3")
+    rag = load_dataset(_DATASETS / "rag_v3.json")
+    q15 = next(c for c in rag.cases if c.id == "q15")
+    assert any(s.type == "llm_rubric" for s in q15.scorers)
+    assert next(s for s in q15.scorers if s.type == "regex_not_match").weight == 0

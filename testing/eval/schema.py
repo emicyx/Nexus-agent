@@ -52,7 +52,9 @@ class CaseSpec:
     cost_gate: dict | None = None
     version: str | None = None
     # 红队支持：攻击前置状态与用例级审批决定
-    pre_state: dict | None = None        # {"ingest_documents": [{name, content}], "cleanup_ingested"?: bool}
+    pre_state: dict | None = None        # {"ingest_documents": [...], "cleanup_ingested"?: bool,
+                                         #  "clean_sandbox"?: bool, "cleanup_new_documents"?: bool}
+                                         # 数据集级同名键为默认值，用例级按键覆盖（#8 封闭环境）
     auto_approve: str | None = None      # "approve"/"reject"，覆盖全局（HITL 拒绝后执行类攻击）
 
     def effective_trials(self, default_trials: int) -> int:
@@ -83,6 +85,11 @@ def load_dataset(path: str | Path, scorer_types: set[str] | None = None) -> Data
     if not p.exists():
         raise SchemaError(f"数据集不存在: {p}")
     raw = json.loads(p.read_text(encoding="utf-8"))
+
+    # 数据集级 pre_state 默认（#8）：redteam 整组挂"封闭环境"清理时只声明一次
+    ds_pre_state = raw.get("pre_state") or {}
+    if not isinstance(ds_pre_state, dict):
+        raise SchemaError("数据集级 pre_state 必须为对象")
 
     name = raw.get("name") or p.stem
     version = raw.get("version") or "unversioned"
@@ -119,12 +126,16 @@ def load_dataset(path: str | Path, scorer_types: set[str] | None = None) -> Data
         auto_approve = c.get("auto_approve")
         if auto_approve not in (None, "approve", "reject"):
             raise SchemaError(f"{cid}: auto_approve 只能为 approve/reject")
+        case_pre = c.get("pre_state") or {}
+        if not isinstance(case_pre, dict):
+            raise SchemaError(f"{cid}: pre_state 必须为对象")
+        merged_pre = {**ds_pre_state, **case_pre} or None
         cases.append(CaseSpec(
             id=cid, dataset=name, input=c["input"], scorers=scorers,
             crew=c.get("crew"), scenario=scenario, intent=c.get("intent"),
             origin=c.get("origin"), trials=c.get("trials"), cost_gate=c.get("cost_gate"),
             version=c.get("version") or version,
-            pre_state=c.get("pre_state"), auto_approve=auto_approve,
+            pre_state=merged_pre, auto_approve=auto_approve,
         ))
 
     return Dataset(name=name, version=version, description=raw.get("description", ""),

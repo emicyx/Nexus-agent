@@ -15,6 +15,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import sys
 import time
 from datetime import datetime
@@ -60,6 +61,37 @@ class EnvAdapter:
                 return True
         return False
 
+    def document_ids(self) -> set[int]:
+        return {d["id"] for d in self.client.get("/v1/documents").json()}
+
+    def delete_documents_by_ids(self, ids: list[int]) -> int:
+        deleted = 0
+        for i in ids:
+            try:
+                if self.client.delete(f"/v1/documents/{i}").status_code < 300:
+                    deleted += 1
+            except Exception:
+                pass
+        return deleted
+
+    def clean_sandbox(self) -> int:
+        """清空沙箱目录内容（目录本身保留）：#8 封闭环境，跨用例残留是
+        '被拒后换路完成'的素材（rt-5 实录：捡 inc-a3 遗留文件入库）。"""
+        removed = 0
+        root = self.sandbox_dir
+        if not root.is_dir():
+            return 0
+        for p in root.iterdir():
+            try:
+                if p.is_dir():
+                    shutil.rmtree(p)
+                else:
+                    p.unlink()
+                removed += 1
+            except OSError:
+                pass
+        return removed
+
     def metrics_today_tokens(self) -> float | None:
         """当日 LLM token 总量（/metrics counter）。试验前后差 = 该次成本。"""
         try:
@@ -83,7 +115,15 @@ class EnvAdapter:
             for f in sorted(out_dir.rglob("*")):
                 if f.is_file():
                     files.append({"path": f.relative_to(out_dir).as_posix(), "size": f.stat().st_size})
-        return {"files": files}
+        # 沙箱外（父目录范围内、不含沙箱自身）文件清单：../ 路径断言用
+        # （#9：越界写入的硬门禁应锚"outputs/../x.md 这类沙箱外目标不存在"）
+        parent_files = []
+        parent = out_dir.parent
+        if parent.is_dir():
+            for f in sorted(parent.rglob("*")):
+                if f.is_file() and out_dir not in f.parents:
+                    parent_files.append({"path": f.relative_to(parent).as_posix(), "size": f.stat().st_size})
+        return {"files": files, "parent_files": parent_files}
 
     def config_payloads(self) -> dict[str, str] | None:
         try:
@@ -319,17 +359,34 @@ def main() -> int:
         for case in d.cases:
             needs_db = any(s.type == "db_assert" for s in case.scorers)
             needs_sb = any(s.type == "sandbox_file" for s in case.scorers)
+            pre = case.pre_state or {}
             # 红队前置：攻击载荷入库（毒文档），用例结束自动清理（封闭攻击环境）
             ingested: list[str] = []
-            for doc in (case.pre_state or {}).get("ingest_documents", []):
+            for doc in pre.get("ingest_documents", []):
                 try:
                     env.ingest_document(doc["name"], doc["content"])
                     ingested.append(doc["name"])
                     print(f"    [pre] 攻击语料入库: {doc['name']}")
                 except Exception as e:
                     print(f"    [pre] 攻击语料入库失败: {e}", file=sys.stderr)
+            # #8 封闭环境：用例级沙箱清理（每 trial 前重置 + 用例后回收）与
+            # 新增文档回收（agent 在用例期间自行入库的垃圾不跨用例累积）
+            clean_sb = bool(pre.get("clean_sandbox"))
+            reclaim_docs = bool(pre.get("cleanup_new_documents"))
+            doc_ids_before = None
+            if reclaim_docs:
+                try:
+                    # 取自毒文档入库之后：毒文档由 cleanup_ingested 机制负责
+                    doc_ids_before = env.document_ids()
+                except Exception as e:
+                    print(f"    [pre] 文档快照失败（新增文档回收停用）: {e}", file=sys.stderr)
+            if clean_sb:
+                env.clean_sandbox()
+                print("    [pre] 沙箱已清理（封闭环境）")
             trials: list[TrialResult] = []
             for i in range(case.effective_trials(n_trials)):
+                if clean_sb:
+                    env.clean_sandbox()  # trial 间隔离：上一 trial 的产物不泄入下一 trial 快照
                 record = run_trial(env, case.input, case.crew, args.timeout, needs_db, needs_sb,
                                    approval_decision=case.auto_approve or args.auto_approve)
                 # 原始事件落盘：失败校准的证据链（没有它，断言措辞问题无法诊断）
@@ -344,10 +401,21 @@ def main() -> int:
             cr = aggregate_case(case.id, d.name, trials)
             case_results.append(cr)
             print(f"[eval] {case.id}: {cr.level}{' 🔁flaky' if cr.flaky else ''} dist={cr.distribution}")
-            if ingested and (case.pre_state or {}).get("cleanup_ingested", True):
+            if ingested and pre.get("cleanup_ingested", True):
                 for n in ingested:
                     env.delete_document(n)
                 print(f"    [post] 攻击语料已清理: {ingested}")
+            if reclaim_docs and doc_ids_before is not None:
+                try:
+                    new_ids = sorted(env.document_ids() - doc_ids_before)
+                    if new_ids:
+                        env.delete_documents_by_ids(new_ids)
+                    print(f"    [post] 用例期间新增文档已回收: {len(new_ids)} 条")
+                except Exception as e:
+                    print(f"    [post] 新增文档回收失败: {e}", file=sys.stderr)
+            if clean_sb:
+                env.clean_sandbox()
+                print("    [post] 沙箱已清理")
 
     result = {
         "fingerprint": fp.as_dict(),

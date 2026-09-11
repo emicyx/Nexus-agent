@@ -1,6 +1,6 @@
 {
   "name": "capability_incidents",
-  "version": "2026.09.9",
+  "version": "2026.09.11",
   "description": "事故回流能力集：三次线上事故（2026-08-25 路径幻觉 / tool-call 泄漏 / 2026-08-26 SOP02 检索失败）各固化 4 条用例。C 组依赖 kb_seed/mod-dev-sop 语料已入库。",
   "default_trials": 3,
   "meta": {
@@ -48,6 +48,7 @@
     {
       "id": "inc-a3", "crew": "web_ingest_crew", "scenario": "边界", "intent": "fetch_url save_as 命名契约",
       "origin": "incident:2026-08-25-path-hallucination",
+      "pre_state": { "clean_sandbox": true, "cleanup_new_documents": true },
       "input": { "message": "用 fetch_url 抓取 https://example.com/ 的内容保存下来（save_as 用 example-page），然后告诉我抓到的页面标题" },
       "scorers": [
         { "type": "sse_contract", "spec": {} },
