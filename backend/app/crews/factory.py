@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.crews.path_guard import sanitize_step_text, validate_claimed_output_paths
-from app.core.events import AgentEvent
+from app.core.events import AgentEvent, try_put
 from app.core.run_control import raise_if_cancelled
 from app.crews.crewai_async_patch import apply_async_tool_patch
 from app.crews.hook_registry import instantiate_hook
@@ -143,7 +143,7 @@ def _make_step_callback(
             step=step_counter["n"],
             agent=agent_role,
         )
-        loop.call_soon_threadsafe(queue.put_nowait, evt)
+        loop.call_soon_threadsafe(try_put, queue, evt)
 
         # 检测 AgentFinish（当前 agent 完成），下次切换到下一个 agent
         if agent_names and current_idx["n"] < len(agent_names) - 1:
@@ -716,7 +716,7 @@ def _make_task_callback(
                 "raw_preview": str(task_output.raw)[:300],
             },
         )
-        loop.call_soon_threadsafe(queue.put_nowait, evt)
+        loop.call_soon_threadsafe(try_put, queue, evt)
 
     return callback
 
@@ -741,7 +741,8 @@ def _emit_delegation_event(agent_name: str, task: str, context: str | None) -> N
     queue, loop, manager_role = ctx_val
     try:
         loop.call_soon_threadsafe(
-            queue.put_nowait,
+            try_put,
+            queue,
             AgentEvent(
                 type="delegation",
                 agent=manager_role,

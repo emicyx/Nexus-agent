@@ -610,6 +610,12 @@ class AliyunLLM(BaseLLM):
                     available_functions,
                     max_iterations - 1,
                 )
+            # 请求未声明 tools 时模型仍可能续写 tool_calls（历史消息里有工具
+            # 调用轨迹，典型如 CrewAI max_iter 兜底收尾调用）。这类调用方
+            # 期望字符串；返回列表会一路传到 TaskOutput(raw=...) 触发
+            # validation error 并吞掉整轮 final_answer——降级为可读字符串。
+            if not tools:
+                return self._tool_calls_to_text(message)
             # CrewAI 会故意传 available_functions=None，让 LLM 只返回原始 tool_calls，
             # 由 executor 的 _handle_native_tool_calls 执行。此处直接返回 tool_calls 列表。
             for tc in message["tool_calls"]:
@@ -627,6 +633,30 @@ class AliyunLLM(BaseLLM):
         if content is None:
             raise ValueError("响应中未找到 content 字段")
         return content
+
+    @staticmethod
+    def _tool_calls_to_text(message: dict[str, Any]) -> str:
+        """未声明 tools 的调用收到 tool_calls 响应时的字符串降级。
+
+        优先取 message.content（部分模型 tool_calls 与 content 并存）；
+        否则生成可读摘要——不序列化原始 tool_calls JSON：
+        1) 该文本常成为任务最终输出，raw JSON 对用户是噪音；
+        2) 平台有 tool-call 泄漏护栏（"arguments": 等模式断言），
+        JSON 形态会被判为泄漏。
+        """
+        content = message.get("content")
+        if isinstance(content, str) and content.strip():
+            return content
+        parts = []
+        for tc in message.get("tool_calls") or []:
+            fn = tc.get("function", {}) or {}
+            args = fn.get("arguments", "")
+            args = args if isinstance(args, str) else json.dumps(args, ensure_ascii=False)
+            parts.append(f"{fn.get('name', '?')}({args[:200]})")
+        return (
+            "[系统提示] 模型在收尾阶段仍尝试发起工具调用"
+            f"（{'；'.join(parts) or '无'}），已按文本收尾，任务可能未完成。"
+        )
 
     def _handle_function_calls(
         self,
@@ -866,6 +896,11 @@ class AliyunLLM(BaseLLM):
                     available_functions,
                     max_iterations - 1,
                 )
+            # 请求未声明 tools 时模型仍可能续写 tool_calls（历史消息里有工具
+            # 调用轨迹）。这类调用方期望字符串——返回列表会让 TaskOutput(raw=...)
+            # 触发 validation error（同步路径 _process_response 同修）。
+            if not tools:
+                return self._tool_calls_to_text(message)
             # CrewAI 故意传 available_functions=None，由 executor 的
             # _handle_native_tool_calls 执行；此处直接返回规范化后的 tool_calls。
             return _sanitize_tool_calls_arguments(message["tool_calls"])
@@ -1058,6 +1093,7 @@ class AliyunLLM(BaseLLM):
         tool_calls_acc: dict[int, dict[str, Any]] = {}
         has_tool_calls = False
         stream_usage: dict[str, Any] | None = None  # A2: 末尾 usage chunk
+        finish_seen = False  # usage chunk 位于 finish_reason 之后，不能提前退出
         client = _get_async_client()
         timeout = httpx.Timeout(connect=30.0, read=float(self.timeout), write=30.0, pool=30.0)
         headers = {
@@ -1136,7 +1172,12 @@ class AliyunLLM(BaseLLM):
                         if not has_tool_calls:
                             ctx.on_token(content)
 
+                    # A2 计量：include_usage 的 usage chunk 在 finish_reason 之后、
+                    # [DONE] 之前才到达——这里 break 会永远读不到 usage（计量恒 0）。
+                    # 收齐 finish_reason + usage 即退出；缺 usage 则等 [DONE]/流结束。
                     if finish_reason:
+                        finish_seen = True
+                    if finish_seen and stream_usage:
                         break
         except httpx.TimeoutException as e:
             logger.exception("streaming request timed out, falling back to non-streaming")
@@ -1303,6 +1344,7 @@ class AliyunLLM(BaseLLM):
         tool_calls_acc: dict[int, dict[str, Any]] = {}
         has_tool_calls = False
         stream_usage: dict[str, Any] | None = None  # A2: 末尾 usage chunk
+        finish_seen = False  # usage chunk 位于 finish_reason 之后，不能提前退出
 
         try:
             resp = session.post(
@@ -1385,7 +1427,12 @@ class AliyunLLM(BaseLLM):
                     if not has_tool_calls:
                         ctx.on_token(content)
 
+                # A2 计量：include_usage 的 usage chunk 在 finish_reason 之后、
+                # [DONE] 之前才到达——这里 break 会永远读不到 usage（计量恒 0）。
+                # 收齐 finish_reason + usage 即退出；缺 usage 则等 [DONE]/流结束。
                 if finish_reason:
+                    finish_seen = True
+                if finish_seen and stream_usage:
                     break
         except Exception as e:
             logger.exception("streaming parse error, partial_text=%d chars", len(full_text))

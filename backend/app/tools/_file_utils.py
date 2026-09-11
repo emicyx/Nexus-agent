@@ -100,6 +100,19 @@ def _ensure_within(path: Path, base: Path, what: str) -> Path:
     )
 
 
+def _strip_redundant_outputs_prefix(part: str) -> str:
+    """剥掉用户措辞里冗余的 outputs/ 前缀（写入根本身已是 outputs/）。
+
+    用户/上游 agent 常以沙箱相对口径传 "outputs/rag-note.md"，
+    直接拼接会落到 outputs/outputs/rag-note.md（评测 inc-b4 实录：
+    连续多次写入都指向双重前缀路径）。仅剥一层，目录分隔符统一按 / 处理。
+    """
+    segments = [s for s in part.replace("\\", "/").split("/") if s not in ("", ".")]
+    if segments and segments[0] == "outputs":
+        segments = segments[1:]
+    return "/".join(segments)
+
+
 def resolve_output_path(filename: str, sub_dir: str = "") -> Path:
     """解析输出文件路径，自动创建目录，强制限制在 outputs 沙箱内。
 
@@ -109,6 +122,10 @@ def resolve_output_path(filename: str, sub_dir: str = "") -> Path:
     """
     if Path(filename).is_absolute() or Path(sub_dir).is_absolute():
         raise SandboxViolation("filename/sub_dir 不允许使用绝对路径")
+    filename = _strip_redundant_outputs_prefix(filename)
+    sub_dir = _strip_redundant_outputs_prefix(sub_dir)
+    if not filename:
+        raise SandboxViolation("filename 不能为空（剥离 outputs/ 前缀后为空）")
     base = output_base()
     target = base / sub_dir / filename if sub_dir else base / filename
     final = _ensure_within(target, base, "写入")

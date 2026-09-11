@@ -1,6 +1,7 @@
 # CrewAI 多智能体系统核心依赖
+# crewai-tools 已移除（2026-09-11）：全代码库零 import（平台工具均自研），
+# 且其硬依赖 lancedb~=0.5.4 已从 PyPI 下架，导致镜像无法重建
 crewai==1.9.3
-crewai-tools==1.9.3
 
 # HTTP 请求库
 requests==2.32.5

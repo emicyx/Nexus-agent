@@ -183,6 +183,152 @@ def test_streaming_content_and_tool_calls_mutually_exclusive():
     assert recorder.tokens == ["思考"]
 
 
+# ---------- 流式 usage 计量（回归：token 计量恒 0） ----------
+
+def test_streaming_usage_chunk_after_finish_reason_is_recorded():
+    """usage chunk 在 finish_reason 之后、[DONE] 之前到达——必须在 finish_reason
+    处继续读取并计量（旧实现 break 过早导致 /metrics 恒 0）。"""
+    from app.core import token_budget
+
+    token_budget.reset_for_tests()
+    try:
+        llm = _make_llm()
+        lines = [
+            'data: {"choices":[{"delta":{"content":"你好"},"finish_reason":null}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+            'data: {"choices":[],"usage":{"prompt_tokens":11,"completion_tokens":7,"total_tokens":18}}',
+            "data: [DONE]",
+        ]
+        session = FakeSession([FakeResponse(status_code=200, lines=lines)])
+        ctx = _DummyCtx(TokenRecorder())
+        result = llm._call_streaming({"model": "qwen-plus"}, session, ctx)
+        assert result == "你好"
+        assert token_budget.get_today_total() == 18
+    finally:
+        token_budget.reset_for_tests()
+
+
+def test_streaming_usage_recorded_for_tool_calls_path():
+    """tool_calls 流同样要读到末尾 usage chunk 并计量。"""
+    from app.core import token_budget
+
+    token_budget.reset_for_tests()
+    try:
+        llm = _make_llm()
+        lines = [
+            'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c1","type":"function",'
+            '"function":{"name":"search","arguments":"{}"}}]},"finish_reason":null}]}',
+            'data: {"choices":[{"delta":{},"finish_reason":"tool_calls"}]}',
+            'data: {"choices":[],"usage":{"prompt_tokens":5,"completion_tokens":4,"total_tokens":9}}',
+            "data: [DONE]",
+        ]
+        session = FakeSession([FakeResponse(status_code=200, lines=lines)])
+        ctx = _DummyCtx(TokenRecorder())
+        result = llm._call_streaming({"model": "qwen-plus"}, session, ctx)
+        assert isinstance(result, dict)
+        assert token_budget.get_today_total() == 9
+    finally:
+        token_budget.reset_for_tests()
+
+
+def test_streaming_without_usage_chunk_still_terminates():
+    """无 usage chunk、无 [DONE]（流直接结束）时不能挂起，行为与旧实现一致。"""
+    llm = _make_llm()
+    lines = [
+        'data: {"choices":[{"delta":{"content":"好"},"finish_reason":null}]}',
+        'data: {"choices":[{"delta":{},"finish_reason":"stop"}]}',
+    ]
+    session = FakeSession([FakeResponse(status_code=200, lines=lines)])
+    recorder = TokenRecorder()
+    ctx = _DummyCtx(recorder)
+    result = llm._call_streaming({"model": "qwen-plus"}, session, ctx)
+    assert result == "好"
+    assert recorder.tokens == ["好"]
+
+
+# ---------- tool_calls 无 tools 声明时的字符串降级（回归：TaskOutput validation error） ----------
+
+def _tool_call_response(content=None):
+    """构造 DashScope tool_calls 响应 dict（历史消息含工具轨迹时模型可能续写）。"""
+    return {
+        "choices": [{
+            "message": {
+                "role": "assistant",
+                "content": content,
+                "tool_calls": [{
+                    "id": "call_x",
+                    "type": "function",
+                    "function": {
+                        "name": "write_markdown_file",
+                        "arguments": '{"path": "outputs/rag-note.md"}',
+                    },
+                }],
+            },
+            "finish_reason": "tool_calls",
+        }]
+    }
+
+
+def test_process_response_tool_calls_without_tools_returns_string():
+    """回归 inc-b4：调用未声明 tools（如 CrewAI max_iter 兜底收尾）时模型续写
+    tool_calls，必须降级为字符串——返回列表会传到 TaskOutput(raw=...) 引发
+    validation error 并吞掉整轮 final_answer。"""
+    llm = _make_llm()
+    out = llm._process_response(
+        _tool_call_response(), [{"role": "user", "content": "hi"}], None, None, 10
+    )
+    assert isinstance(out, str)
+    assert "write_markdown_file" in out
+    # 降级文本不得带 tool_calls 原始 JSON 形态（tool-call 泄漏护栏断言
+    # "arguments": 模式，泄漏会被评测判败）
+    assert '"arguments"' not in out
+    assert '"function"' not in out
+
+
+def test_process_response_tool_calls_with_tools_keeps_list_protocol():
+    """executor 原生工具协议（tools 声明 + available_functions=None）不变：仍返回列表。"""
+    llm = _make_llm()
+    tools = [{"type": "function", "function": {"name": "write_markdown_file", "parameters": {}}}]
+    out = llm._process_response(
+        _tool_call_response(), [{"role": "user", "content": "hi"}], tools, None, 10
+    )
+    assert isinstance(out, list)
+    assert out[0]["function"]["name"] == "write_markdown_file"
+
+
+def test_process_response_tool_calls_without_tools_prefers_content():
+    """tool_calls 与 content 并存时优先返回 content。"""
+    llm = _make_llm()
+    out = llm._process_response(
+        _tool_call_response(content="最终答案"), [{"role": "user", "content": "hi"}], None, None, 10
+    )
+    assert out == "最终答案"
+
+
+def test_extract_async_response_tool_calls_without_tools_returns_string():
+    """异步路径同样降级为字符串。"""
+    import asyncio
+
+    llm = _make_llm()
+
+    async def run():
+        return await llm._extract_async_response(
+            _tool_call_response(), [{"role": "user", "content": "hi"}], None, None, 10
+        )
+
+    out = asyncio.run(run())
+    assert isinstance(out, str)
+
+
+def test_call_without_tools_degrades_tool_calls_to_string():
+    """端到端：call() 未声明 tools 收到 tool_calls 响应，最终返回 str。"""
+    llm = _make_llm()
+    session = FakeSession([FakeResponse(status_code=200, json_body=_tool_call_response())])
+    llm._session = session
+    out = llm.call([{"role": "user", "content": "hi"}])
+    assert isinstance(out, str)
+
+
 # ---------- 非流式重试 ----------
 
 def test_do_call_retries_5xx_then_succeeds():

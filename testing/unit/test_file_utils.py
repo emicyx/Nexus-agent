@@ -55,6 +55,27 @@ def test_output_dotdot_filename_rejected():
         resolve_output_path("../../etc/passwd.txt")
 
 
+def test_output_redundant_outputs_prefix_stripped():
+    """回归 inc-b4：用户措辞 'outputs/rag-note.md' 不应落成 outputs/outputs/ 双重前缀。"""
+    data = None
+    from app.tools._file_utils import output_base
+    base = output_base()
+    p = resolve_output_path("outputs/rag-note.md")
+    assert p == (base / "rag-note.md").resolve()
+    # 只剥一层前缀，真实子目录不受影响
+    p2 = resolve_output_path("notes/rag-note.md")
+    assert p2 == (base / "notes" / "rag-note.md").resolve()
+    # sub_dir 的冗余前缀同样剥离
+    p3 = resolve_output_path("rag-note.md", "outputs/notes")
+    assert p3 == (base / "notes" / "rag-note.md").resolve()
+
+
+def test_output_filename_only_outputs_rejected():
+    """剥掉 outputs/ 后为空（filename 恰为 'outputs'）应拒绝而非写目录本身。"""
+    with pytest.raises(SandboxViolation):
+        resolve_output_path("outputs")
+
+
 def test_sandbox_violation_is_permission_error():
     assert issubclass(SandboxViolation, PermissionError)
 
