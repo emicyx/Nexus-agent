@@ -61,3 +61,7 @@ doc/*简明*
 # backend/testing/ 是 testing/ 的本地镜像（容器经 ./backend 挂载访问），不入库
 backend/testing/
 team_json/
+
+# S1 NapCat 运行时数据（QQ 登录态 / onebot 配置，含敏感 token）
+data/napcat/
+data/napcat-config/
