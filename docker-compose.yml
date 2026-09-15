@@ -77,5 +77,21 @@ services:
     depends_on:
       - backend
 
+  # S1 QQ 渠道（NapCat / OneBot 11 反向 WS）。端口纪律（执行计划 §2.3/4.1）：
+  # WebUI 6099 仅绑 loopback（本机浏览器扫码配置，不对公网暴露任何端口）；
+  # OneBot 反向 WS 走 compose 内网连 backend:8000，不经公网。
+  # 不加 compose healthcheck：登录前 WebUI 也未就绪会误判 unhealthy，
+  # 通道可用性以 /metrics 的 onebot_connected gauge 观测（断线自动重连）。
+  napcat:
+    image: mlikiowa/napcat-docker:latest
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:6099:6099"
+    volumes:
+      # QQ 登录态持久化（容器重启不重登）；首次登录后 WebUI 里配置反向 WS
+      - ./data/napcat:/app/.config/QQ
+    depends_on:
+      - backend
+
 volumes:
   pgdata:

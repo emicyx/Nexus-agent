@@ -15,6 +15,7 @@ from sqlalchemy import text
 
 from app.api.v1.agents import router as agents_router
 from app.api.v1.approvals import router as approvals_router
+from app.api.v1.channels import router as channels_router
 from app.api.v1.chat import router as chat_router
 from app.api.v1.chat_sessions import router as chat_sessions_router
 from app.api.v1.crews import router as crews_router
@@ -34,6 +35,7 @@ from app.core.sandbox_cleanup import (
 from app.core.security import require_api_key
 from app.crews.crewai_async_patch import is_applied as is_async_patch_applied
 from app.crews.factory import get_llm
+from app.channels.onebot_adapter import router as onebot_router
 from app.db.redis import close_async_redis, close_sync_redis, get_async_redis
 from app.db.seed import ensure_seed
 from app.db.session import AsyncSessionLocal, dispose_engines, init_db
@@ -275,3 +277,7 @@ app.include_router(crews_router, prefix="/v1/crews", dependencies=_api_key_dep)
 app.include_router(documents_router, prefix="/v1/documents", dependencies=_api_key_dep)
 app.include_router(approvals_router, prefix="/v1/approvals", dependencies=_api_key_dep)
 app.include_router(memories_router, prefix="/v1/memories", dependencies=_api_key_dep)
+app.include_router(channels_router, prefix="/v1/channels", dependencies=_api_key_dep)
+# OneBot 反向 WS：token 校验在 endpoint 内完成（安全不变量 5），
+# 不走 X-API-Key（NapCat 用 query token 而非 header）
+app.include_router(onebot_router)

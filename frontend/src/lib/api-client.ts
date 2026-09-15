@@ -398,3 +398,20 @@ export const getChatSessionByUuid = (uuid: string) =>
 export const deleteChatSession = (id: number) =>
   jsonRequest<void>(`${API_BASE}/v1/chat/sessions/${id}`, { method: "DELETE" });
 
+
+// ---- Channel（S1：渠道在线状态，/chat 顶栏 chip 轮询）----
+export interface OneBotChannelStatus {
+  connected: boolean;
+  connected_since: number | null;
+  configured: boolean;
+}
+
+export interface ChannelsStatus {
+  onebot: OneBotChannelStatus;
+}
+
+export const getChannelsStatus = () =>
+  jsonRequest<ChannelsStatus>(`${API_BASE}/v1/channels`);
+
+/** 会话来源判别：session_uuid 以 "qq:" 前缀开头 = QQ 渠道会话（§4.5）。 */
+export const isQQSession = (sessionUuid: string) => sessionUuid.startsWith("qq:");

@@ -137,5 +137,18 @@ class Settings(BaseSettings):
     # 关闭方法：设 STREAMING_WITH_TOOLS_ENABLED=false（回退到不流式）
     STREAMING_WITH_TOOLS_ENABLED: bool = True
 
+    # ── S1 QQ 渠道（OneBot 11 反向 WebSocket，NapCat 接入）──────────────
+    # WS 鉴权 token：NapCat 反向 WS 连 /v1/channels/onebot/ws?token=... 时校验。
+    # 必须配置（安全不变量 5：未配置时 WS endpoint 拒绝一切连接，通道关闭）。
+    ONEBOT_WS_TOKEN: str = ""
+    # owner 白名单（安全不变量 6）：逗号分隔 QQ 号，名单外入站消息记 WARNING 并静默。
+    QQ_OWNER_IDS: str = ""
+    # 机器人自身 QQ 号：群消息 @ 匹配用（消息 at 段 qq == 本值才处理）。
+    QQ_BOT_SELF_ID: str = ""
+    # QQ 单条消息长度上限（超长分段发送；OneBot 纯文本段，NapCat 建议单条 <1500 字）
+    QQ_MESSAGE_MAX_LEN: int = 1500
+    # 同一会话排队上限（§4.4：处理中再来消息 FIFO 排队，超限回"正在处理中"）
+    QQ_SESSION_QUEUE_MAX: int = 5
+
 
 settings = Settings()

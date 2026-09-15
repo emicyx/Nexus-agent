@@ -11,10 +11,13 @@ import {
   listCrews,
   listChatSessions,
   deleteChatSession,
+  getChannelsStatus,
+  isQQSession,
   type CrewRead,
   type ChatSessionRead,
+  type OneBotChannelStatus,
 } from "@/lib/api-client";
-import { Send, Square, Plus, Users, GitBranch, MessageCircle, Trash2, History, Loader2, ArrowDown, Sparkles, Terminal } from "lucide-react";
+import { Send, Square, Plus, Users, GitBranch, MessageCircle, Trash2, History, Loader2, ArrowDown, Sparkles, Terminal, Radio } from "lucide-react";
 
 const DEV_MODE_STORAGE_KEY = "nexus:dev_mode";
 
@@ -73,6 +76,22 @@ export default function ChatPage() {
         console.error("加载 Crew 列表失败:", err);
         setCrews([]);
       });
+  }, []);
+
+  // S1 渠道在线状态（QQ chip）：挂载时查 + 60s 轮询；未配置渠道不渲染
+  const [onebot, setOnebot] = useState<OneBotChannelStatus | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const poll = () =>
+      getChannelsStatus()
+        .then((s) => alive && setOnebot(s.onebot))
+        .catch(() => {/* 后端不可达时保持上次状态 */});
+    poll();
+    const timer = setInterval(poll, 60_000);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
   }, []);
 
   // 会话列表：Auto 模式列出全部会话（路由的 crew 不固定）；开发者模式按所选 crew 过滤
@@ -200,6 +219,34 @@ export default function ChatPage() {
   // 左栏内容
   const leftPanel = (
     <div className="flex h-full flex-col p-3">
+      {/* S1 渠道在线状态 chip：仅配置了 QQ 渠道时渲染 */}
+      {onebot?.configured && (
+        <div
+          className={`mb-3 flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-[11px] ${
+            onebot.connected
+              ? "border-emerald-200 bg-emerald-50/60 text-emerald-700"
+              : "border-amber-200 bg-amber-50/60 text-amber-700"
+          }`}
+          title={
+            onebot.connected && onebot.connected_since
+              ? `已连接：${new Date(onebot.connected_since * 1000).toLocaleString("zh-CN")}`
+              : "NapCat 未连接（断线会自动重连）"
+          }
+        >
+          <span className="flex items-center gap-1.5">
+            <Radio size={12} />
+            QQ 渠道
+          </span>
+          <span className={`flex items-center gap-1 ${onebot.connected ? "" : "opacity-80"}`}>
+            <span
+              className={`h-1.5 w-1.5 rounded-full ${
+                onebot.connected ? "animate-pulse bg-emerald-500" : "bg-amber-500"
+              }`}
+            />
+            {onebot.connected ? "在线" : "离线"}
+          </span>
+        </div>
+      )}
       {/* 模式区：Auto 助手模式（默认）/ 开发者模式的 Crew 选择 */}
       {autoMode ? (
         <div className="mb-3 rounded-lg border border-sakura-200 bg-sakura-50/50 p-3">
@@ -283,8 +330,13 @@ export default function ChatPage() {
                 } ${isStreaming ? "pointer-events-none opacity-60" : ""}`}
               >
                 <div className="min-w-0 flex-1">
-                  <div className={`truncate text-xs font-medium ${isActive ? "text-sakura-700" : "text-sakura-600"}`}>
-                    {s.title || "新对话"}
+                  <div className={`flex items-center gap-1 truncate text-xs font-medium ${isActive ? "text-sakura-700" : "text-sakura-600"}`}>
+                    <span className="truncate">{s.title || "新对话"}</span>
+                    {isQQSession(s.session_uuid) && (
+                      <span className="shrink-0 rounded bg-indigo-100 px-1 py-px text-[9px] font-medium text-indigo-600">
+                        QQ
+                      </span>
+                    )}
                   </div>
                   <div className="mt-0.5 flex items-center gap-2 text-[10px] text-sakura-400">
                     <span>{s.message_count} 条</span>

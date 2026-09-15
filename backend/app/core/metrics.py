@@ -89,6 +89,19 @@ def render_metrics() -> str:
     for session, total in get_session_totals().items():
         counter("token_usage_session_total", "每会话 LLM token 消耗", total, {"session": session})
 
+    # S1 QQ 渠道在线状态（onebot_adapter 维护，lazy import 防循环依赖）
+    try:
+        from app.channels import onebot_adapter
+
+        onebot = onebot_adapter.get_status()
+        gauge("onebot_connected", "OneBot（QQ）反向 WS 连接状态（1=在线）",
+              1 if onebot["connected"] else 0)
+        gauge("onebot_connected_since_seconds",
+              "OneBot 连接建立时的 epoch 时间戳（0=离线）",
+              onebot["connected_since"] or 0)
+    except Exception:
+        pass  # channels 模块异常不应拖垮整个 /metrics
+
     return "\n".join(lines) + "\n"
 
 
