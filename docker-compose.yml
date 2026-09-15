@@ -85,11 +85,16 @@ services:
   napcat:
     image: mlikiowa/napcat-docker:latest
     restart: unless-stopped
+    environment:
+      # 快速登录账号：容器重启后自动登录（免扫码；首次仍需 WebUI 扫码）
+      - ACCOUNT=2730475638
     ports:
       - "127.0.0.1:6099:6099"
     volumes:
       # QQ 登录态持久化（容器重启不重登）；首次登录后 WebUI 里配置反向 WS
       - ./data/napcat:/app/.config/QQ
+      # NapCat 自身配置持久化（反向 WS/onebot11 配置——不挂则容器重建丢失）
+      - ./data/napcat-config:/app/napcat/config
     depends_on:
       - backend
 
