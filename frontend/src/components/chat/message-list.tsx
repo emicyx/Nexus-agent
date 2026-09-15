@@ -1,6 +1,6 @@
 import { type Message, type Approval, type CollabStep } from "@/hooks/use-chat";
 import { agentStyle } from "@/lib/agent-style";
-import { Brain, User, Sparkles, Send, Cpu } from "lucide-react";
+import { Brain, User, Sparkles, Send, Cpu, GitBranch } from "lucide-react";
 import { ApprovalList } from "./approval-card";
 
 export function MessageList({
@@ -10,6 +10,7 @@ export function MessageList({
   isStreaming,
   onResolveApproval,
   onExampleClick,
+  autoMode = false,
 }: {
   messages: Message[];
   steps: CollabStep[];
@@ -17,10 +18,11 @@ export function MessageList({
   isStreaming: boolean;
   onResolveApproval?: (id: string, decision: "approve" | "reject", comment?: string) => void;
   onExampleClick?: (text: string) => void;
+  autoMode?: boolean;
 }) {
   // 空状态：欢迎卡片 + 示例问题
   if (messages.length === 0) {
-    return <EmptyState onExampleClick={onExampleClick} />;
+    return <EmptyState onExampleClick={onExampleClick} autoMode={autoMode} />;
   }
 
   const lastThinking = steps.filter((s) => s.kind === "thinking" || s.kind === "thinking_streaming").pop();
@@ -74,6 +76,23 @@ function MessageBubble({ message, isStreaming }: { message: Message; isStreaming
             : "bg-white text-zinc-700 border border-sakura-200 shadow-sm"
         }`}
       >
+        {/* routed_crew 徽标：Auto 模式下本条回答实际服务的 crew（透明度与纠错入口） */}
+        {!isUser && message.routedCrew && (
+          <div className="mb-1.5 flex items-center gap-1.5">
+            <span
+              className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium ${
+                message.routedCommand
+                  ? "border-sakura-300 bg-sakura-100 text-sakura-600"
+                  : "border-sakura-200 bg-sakura-50 text-sakura-400"
+              }`}
+              title={message.routedCommand ? `命令 ${message.routedCommand} 路由到 ${message.routedCrew}` : `默认路由到 ${message.routedCrew}`}
+            >
+              <GitBranch size={10} />
+              {message.routedCommand ? `${message.routedCommand} → ` : ""}
+              {message.routedCrew}
+            </span>
+          </div>
+        )}
         <p className="whitespace-pre-wrap break-words text-sm leading-relaxed">
           {message.content || (isStreaming ? (
             <span className="flex items-center gap-1.5 text-sakura-400">
@@ -137,7 +156,7 @@ const EXAMPLES = [
   "写一段关于 AI 的短文",
 ];
 
-function EmptyState({ onExampleClick }: { onExampleClick?: (text: string) => void }) {
+function EmptyState({ onExampleClick, autoMode = false }: { onExampleClick?: (text: string) => void; autoMode?: boolean }) {
   return (
     <div className="flex h-full flex-col items-center justify-center gap-5 px-6 py-8">
       <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-gradient-to-br from-sakura-300 to-sakura-500">
@@ -145,7 +164,9 @@ function EmptyState({ onExampleClick }: { onExampleClick?: (text: string) => voi
       </div>
       <div className="text-center">
         <h2 className="text-lg font-bold text-sakura-900">你好！我是你的 AI Agent 助手</h2>
-        <p className="mt-1 text-sm text-sakura-400">选择一个 Crew，输入问题开始对话</p>
+        <p className="mt-1 text-sm text-sakura-400">
+          {autoMode ? "直接输入问题，或输入 / 使用命令（/kb /write…）" : "选择一个 Crew，输入问题开始对话"}
+        </p>
       </div>
       <div className="grid w-full max-w-md grid-cols-2 gap-2">
         {EXAMPLES.map((ex) => (

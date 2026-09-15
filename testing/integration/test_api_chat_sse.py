@@ -12,6 +12,15 @@ from testing.integration._helpers import cleanup_agent, cleanup_crew, create_age
 
 MOCK_ANSWER = "这是 Mock LLM 的固定回答。"
 
+# 挂 ResearchMaterial output_schema 的 crew（researcher_writer）需要合法 JSON 输出
+SCHEMA_MOCK_ANSWER = '{"title": "t", "key_facts": ["f"], "sources": [], "summary": "s"}'
+
+
+def _async_return(value: str):
+    async def _fake(self, *args, **kwargs):
+        return value
+    return _fake
+
 
 def _parse_sse(body: str) -> list[dict]:
     """把 SSE body 解析为 [{type, data}]，同时校验逐行格式。"""
@@ -110,3 +119,101 @@ def test_chat_single_mode(client: TestClient, monkeypatch):
     assert types[-1] == "done"
     fa = next(e for e in events if e["type"] == "final_answer")
     assert fa["data"]["content"] == MOCK_ANSWER
+
+
+# ==================== v2 R0：Auto 模式（路由 v0） ====================
+
+def test_chat_auto_mode_default_route(client: TestClient, monkeypatch):
+    """mode=auto 无命令前缀 → 默认 crew（researcher_writer），首事件 routed_crew。"""
+    monkeypatch.setattr(settings, "LTM_USER_MEMORY_ENABLED", False)
+    monkeypatch.setattr(settings, "KB_PREINJECT_ENABLED", False)
+    # researcher_writer 的 research 任务挂 ResearchMaterial output_schema，
+    # 默认 Mock 的固定中文串过不了 pydantic JSON 解析，本用例改回合法 JSON
+    from app.llm.aliyun_llm import AliyunLLM
+
+    schema_answer = SCHEMA_MOCK_ANSWER
+    monkeypatch.setattr(AliyunLLM, "call", lambda self, *a, **k: schema_answer)
+    monkeypatch.setattr(
+        AliyunLLM, "acall",
+        _async_return(schema_answer),
+    )
+    with client.stream("POST", "/v1/chat/stream", json={
+        "message": "请介绍一下你自己",
+        "mode": "auto",
+        "crew_id": None,
+        "session_id": None,
+        "single": False,
+    }) as resp:
+        assert resp.status_code == 200
+        body = "".join(resp.iter_text())
+    events = _parse_sse(body)
+    types = [e["type"] for e in events]
+    # 首事件是路由决策（透明度契约），随后正常执行
+    assert types[0] == "routed_crew", f"首事件应为 routed_crew: {types[:5]}"
+    assert events[0]["data"]["content"] == "researcher_writer"
+    assert events[0]["data"]["input"]["command"] is None
+    assert "final_answer" in types
+    assert types[-1] == "done"
+
+
+def test_chat_auto_mode_command_route(client: TestClient, monkeypatch):
+    """mode=auto /kb 命令 → knowledge_qa，命令前缀剥离后送入 crew 并持久化。"""
+    monkeypatch.setattr(settings, "LTM_USER_MEMORY_ENABLED", False)
+    monkeypatch.setattr(settings, "KB_PREINJECT_ENABLED", False)
+    r = client.get("/v1/crews")
+    kb_crew = next(c for c in r.json() if c["name"] == "knowledge_qa")
+    session_uuid = "test-auto-" + uniq("s")
+    with client.stream("POST", "/v1/chat/stream", json={
+        "message": "/kb 混合检索怎么配置",
+        "mode": "auto",
+        "crew_id": None,
+        "session_id": session_uuid,
+        "single": False,
+    }) as resp:
+        assert resp.status_code == 200
+        body = "".join(resp.iter_text())
+    events = _parse_sse(body)
+    types = [e["type"] for e in events]
+    assert types[0] == "routed_crew"
+    assert events[0]["data"]["content"] == "knowledge_qa"
+    assert events[0]["data"]["input"]["command"] == "/kb"
+    assert "final_answer" in types
+    assert types[-1] == "done"
+    # 会话绑定到路由命中的 crew；持久化的用户消息已剥离命令前缀
+    r2 = client.get("/v1/chat/sessions", params={"crew_id": kb_crew["id"]})
+    sess = next(s for s in r2.json() if s["session_uuid"] == session_uuid)
+    detail = client.get(f"/v1/chat/sessions/{sess['id']}").json()
+    assert detail["messages"][0]["content"] == "混合检索怎么配置"
+    client.delete(f"/v1/chat/sessions/{sess['id']}")
+
+
+def test_chat_auto_mode_unknown_command_400(client: TestClient):
+    """未知命令 → 400 + 可用命令清单（不进 LLM）。"""
+    r = client.post("/v1/chat/stream", json={
+        "message": "/nosuch 帮我做事",
+        "mode": "auto",
+    })
+    assert r.status_code == 400
+    assert "未知命令 /nosuch" in r.text
+    assert "/kb" in r.text and "/write" in r.text
+
+
+def test_chat_auto_mode_conflict_400(client: TestClient):
+    """mode=auto 与 crew_id 互斥 → 400。"""
+    r = client.post("/v1/chat/stream", json={
+        "message": "你好",
+        "mode": "auto",
+        "crew_id": 1,
+    })
+    assert r.status_code == 400
+    assert "互斥" in r.text
+
+
+def test_retired_crews_absent_from_catalog(client: TestClient):
+    """v2 R0：退役 crew 被 seed 同步从存量 DB 删除，保留 crew 齐全。"""
+    r = client.get("/v1/crews")
+    names = {c["name"] for c in r.json()}
+    assert "team_orchestrator" not in names
+    assert "safety_check" not in names
+    for required in ("researcher_writer", "knowledge_qa", "web_ingest_crew", "iterative_write_crew"):
+        assert required in names, f"保留 crew 缺失: {required}"

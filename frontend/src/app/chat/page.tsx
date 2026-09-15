@@ -1,11 +1,12 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback, useMemo } from "react";
-import { useChat, type CollabStep } from "@/hooks/use-chat";
+import { useChat, type CollabStep, type ChatMode } from "@/hooks/use-chat";
 import { MessageList } from "@/components/chat/message-list";
 import { StepPanel } from "@/components/chat/step-panel";
 import { AppShell } from "@/components/app-shell";
 import { agentStyle } from "@/lib/agent-style";
+import { commandsFromCrews, filterCommands } from "@/lib/commands";
 import {
   listCrews,
   listChatSessions,
@@ -13,12 +14,35 @@ import {
   type CrewRead,
   type ChatSessionRead,
 } from "@/lib/api-client";
-import { Send, Square, Plus, Users, GitBranch, MessageCircle, Trash2, History, Loader2, ArrowDown } from "lucide-react";
+import { Send, Square, Plus, Users, GitBranch, MessageCircle, Trash2, History, Loader2, ArrowDown, Sparkles, Terminal } from "lucide-react";
+
+const DEV_MODE_STORAGE_KEY = "nexus:dev_mode";
 
 export default function ChatPage() {
   const [crews, setCrews] = useState<CrewRead[]>([]);
+  // v2 R0：默认 Auto 模式（路由 v0 决定 crew）；开发者模式恢复手动 crew 下拉
+  const [devMode, setDevMode] = useState(false);
   const [selectedCrewId, setSelectedCrewId] = useState<number | null>(null);
   const [sessions, setSessions] = useState<ChatSessionRead[]>([]);
+  const mode: ChatMode = devMode ? "manual" : "auto";
+  const autoMode = mode === "auto";
+
+  // 恢复开发者模式偏好（构建期 SSR 无 localStorage，hydration 后再读）
+  useEffect(() => {
+    try {
+      setDevMode(localStorage.getItem(DEV_MODE_STORAGE_KEY) === "1");
+    } catch {
+      // ignore
+    }
+  }, []);
+  useEffect(() => {
+    try {
+      localStorage.setItem(DEV_MODE_STORAGE_KEY, devMode ? "1" : "0");
+    } catch {
+      // ignore
+    }
+  }, [devMode]);
+
   const {
     messages,
     steps,
@@ -27,13 +51,14 @@ export default function ChatPage() {
     error,
     errorKind,
     currentSessionUuid,
+    lastRoutedCrew,
     send,
     stop,
     retry,
     newChat,
     loadSession,
     resolveApproval,
-  } = useChat(selectedCrewId);
+  } = useChat(selectedCrewId, { mode });
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
   // 是否处于滚动容器底部（用户上滚读历史时置 false，暂停自动滚底跟随）
@@ -50,8 +75,17 @@ export default function ChatPage() {
       });
   }, []);
 
-  // 切换 crew 时加载该 crew 的 sessions 列表
-  const refreshSessions = useCallback((crewId: number | null) => {
+  // 会话列表：Auto 模式列出全部会话（路由的 crew 不固定）；开发者模式按所选 crew 过滤
+  const refreshSessions = useCallback((m: ChatMode, crewId: number | null) => {
+    if (m === "auto") {
+      listChatSessions()
+        .then(setSessions)
+        .catch((err) => {
+          console.error("加载会话列表失败:", err);
+          setSessions([]);
+        });
+      return;
+    }
     if (crewId == null) {
       setSessions([]);
       return;
@@ -65,17 +99,17 @@ export default function ChatPage() {
   }, []);
 
   useEffect(() => {
-    refreshSessions(selectedCrewId);
-  }, [selectedCrewId, refreshSessions]);
+    refreshSessions(mode, selectedCrewId);
+  }, [mode, selectedCrewId, refreshSessions]);
 
   // 流式结束后刷新 sessions 列表（同步最新消息数/时间）
   const prevStreamingRef = useRef(false);
   useEffect(() => {
     if (prevStreamingRef.current && !isStreaming) {
-      refreshSessions(selectedCrewId);
+      refreshSessions(mode, selectedCrewId);
     }
     prevStreamingRef.current = isStreaming;
-  }, [isStreaming, selectedCrewId, refreshSessions]);
+  }, [isStreaming, mode, selectedCrewId, refreshSessions]);
 
   // 切换会话/新建对话时重置为跟随底部（先于自动滚底 effect 声明，保证切会话后回到底部）
   useEffect(() => {
@@ -132,7 +166,7 @@ export default function ChatPage() {
     if (isStreaming) return;
     try {
       await deleteChatSession(sessionId);
-      refreshSessions(selectedCrewId);
+      refreshSessions(mode, selectedCrewId);
       // 若删除的是当前 session，则清空当前对话
       if (sessions.find((s) => s.id === sessionId)?.session_uuid === currentSessionUuid) {
         newChat();
@@ -143,37 +177,77 @@ export default function ChatPage() {
   };
 
   const selectedCrew = crews.find((c) => c.id === selectedCrewId) || null;
-  const crewInfo = selectedCrew
+  // 左栏信息卡与右栏 crewInfo 的数据源：
+  // 开发者模式=手选 crew；Auto 模式=最近一次 routed_crew 命中的 crew
+  const infoCrew = autoMode
+    ? (lastRoutedCrew ? crews.find((c) => c.name === lastRoutedCrew.crew) || null : null)
+    : selectedCrew;
+  const crewInfo = infoCrew
     ? {
-        name: selectedCrew.name,
-        agents: selectedCrew.agents.map((a) => ({ id: a.id, name: a.name, role: a.role })),
-        managerRole: selectedCrew.manager_agent?.role ?? null,
+        name: infoCrew.name,
+        agents: infoCrew.agents.map((a) => ({ id: a.id, name: a.name, role: a.role })),
+        managerRole: infoCrew.manager_agent?.role ?? null,
       }
     : null;
+
+  // / 命令列表（来自 crew 目录：crew 存在才展示其命令）
+  const commands = useMemo(() => commandsFromCrews(crews), [crews]);
+  const commandMatches = useMemo(
+    () => (autoMode && !isStreaming ? filterCommands(commands, input) : []),
+    [autoMode, isStreaming, commands, input],
+  );
 
   // 左栏内容
   const leftPanel = (
     <div className="flex h-full flex-col p-3">
-      {/* Crew 选择 */}
-      <div className="mb-3">
-        <label className="mb-1 flex items-center gap-1 text-xs font-medium text-sakura-400">
-          <GitBranch size={12} />
-          Crew 选择
-        </label>
-        <select
-          value={selectedCrewId ?? 0}
-          onChange={(e) => setSelectedCrewId(e.target.value ? Number(e.target.value) : null)}
-          disabled={isStreaming}
-          className="w-full rounded-lg border border-sakura-200 bg-white px-2.5 py-1.5 text-sm text-sakura-700 focus:outline-none focus:ring-2 focus:ring-sakura-300 disabled:opacity-50"
-        >
-          <option value={0}>默认 Crew</option>
-          {crews.map((c) => (
-            <option key={c.id} value={c.id}>
-              {c.name} ({c.process_type})
-            </option>
-          ))}
-        </select>
-      </div>
+      {/* 模式区：Auto 助手模式（默认）/ 开发者模式的 Crew 选择 */}
+      {autoMode ? (
+        <div className="mb-3 rounded-lg border border-sakura-200 bg-sakura-50/50 p-3">
+          <div className="mb-1.5 flex items-center gap-1.5 text-xs font-semibold text-sakura-700">
+            <Sparkles size={13} className="text-sakura-400" />
+            助手模式（Auto）
+          </div>
+          <p className="text-[10px] leading-relaxed text-sakura-400">
+            直接提问由默认助手回答；输入 <span className="font-mono">/</span> 用命令切换专职 Crew。
+          </p>
+          {commands.length > 0 && (
+            <div className="mt-2 flex flex-wrap gap-1">
+              {commands.map((c) => (
+                <button
+                  key={c.command}
+                  type="button"
+                  onClick={() => setInput(`${c.command} `)}
+                  disabled={isStreaming}
+                  title={c.description}
+                  className="rounded-full border border-sakura-200 bg-white px-2 py-0.5 font-mono text-[10px] text-sakura-600 transition hover:border-sakura-300 hover:bg-sakura-50 disabled:opacity-50"
+                >
+                  {c.command}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      ) : (
+        <div className="mb-3">
+          <label className="mb-1 flex items-center gap-1 text-xs font-medium text-sakura-400">
+            <GitBranch size={12} />
+            Crew 选择
+          </label>
+          <select
+            value={selectedCrewId ?? 0}
+            onChange={(e) => setSelectedCrewId(e.target.value ? Number(e.target.value) : null)}
+            disabled={isStreaming}
+            className="w-full rounded-lg border border-sakura-200 bg-white px-2.5 py-1.5 text-sm text-sakura-700 focus:outline-none focus:ring-2 focus:ring-sakura-300 disabled:opacity-50"
+          >
+            <option value={0}>默认 Crew</option>
+            {crews.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name} ({c.process_type})
+              </option>
+            ))}
+          </select>
+        </div>
+      )}
 
       {/* 新建对话 */}
       <button
@@ -240,26 +314,40 @@ export default function ChatPage() {
         )}
       </div>
 
-      {/* 当前 Crew 信息卡片 */}
-      {selectedCrew && (
+      {/* 当前 Crew 信息卡片（开发者模式=手选；Auto=最近路由命中的 crew） */}
+      {infoCrew && (
         <div className="rounded-lg border border-sakura-200 bg-sakura-50/50 p-3">
           <div className="mb-2 flex items-center gap-1.5">
             <Users size={13} className="text-sakura-400" />
-            <span className="text-xs font-semibold text-sakura-700">{selectedCrew.name}</span>
+            <span className="text-xs font-semibold text-sakura-700">{infoCrew.name}</span>
           </div>
           <div className="mb-1 text-[10px] text-sakura-400">
-            模式: {selectedCrew.process_type}
+            模式: {infoCrew.process_type}
           </div>
           <div className="text-[10px] text-sakura-400">
-            Agents: {selectedCrew.agents.map((a) => a.name).join(", ") || "无"}
+            Agents: {infoCrew.agents.map((a) => a.name).join(", ") || "无"}
           </div>
-          {selectedCrew.manager_agent && (
+          {infoCrew.manager_agent && (
             <div className="mt-1 text-[10px] text-sakura-400">
-              主 Agent: {selectedCrew.manager_agent.name}
+              主 Agent: {infoCrew.manager_agent.name}
             </div>
           )}
         </div>
       )}
+
+      {/* 开发者模式开关 */}
+      <div className="mt-3 border-t border-sakura-100 pt-3">
+        <label className="flex cursor-pointer items-center gap-2 text-[11px] text-sakura-500">
+          <input
+            type="checkbox"
+            checked={devMode}
+            onChange={(e) => setDevMode(e.target.checked)}
+            disabled={isStreaming}
+            className="h-3.5 w-3.5 accent-sakura-400"
+          />
+          开发者模式（手动选择 Crew）
+        </label>
+      </div>
 
       {/* 底部统计 */}
       <div className="mt-auto space-y-1 border-t border-sakura-100 pt-3">
@@ -318,6 +406,7 @@ export default function ChatPage() {
             isStreaming={isStreaming}
             onResolveApproval={resolveApproval}
             onExampleClick={(text) => send(text)}
+            autoMode={autoMode}
           />
           {/* 悬浮「回到底部」按钮：用户离开底部读历史时出现 */}
           {showScrollToBottom && (
@@ -375,12 +464,34 @@ export default function ChatPage() {
           </div>
         )}
 
+        {/* / 命令面板：Auto 模式下输入以 / 开头时唤起（来自 crew 目录） */}
+        {commandMatches.length > 0 && (
+          <div className="max-h-44 overflow-y-auto border-t border-sakura-200 bg-white px-3 py-2">
+            {commandMatches.map((c) => (
+              <button
+                key={c.command}
+                type="button"
+                onClick={() => setInput(`${c.command} `)}
+                className="flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left transition hover:bg-sakura-50"
+              >
+                <Terminal size={12} className="shrink-0 text-sakura-400" />
+                <span className="shrink-0 font-mono text-xs font-medium text-sakura-600">{c.command}</span>
+                <span className="truncate text-[11px] text-sakura-400">{c.description}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
         {/* 输入区 */}
         <form onSubmit={handleSubmit} className="flex gap-2 border-t border-sakura-200 bg-white/80 p-3">
           <input
             value={input}
             onChange={(e) => setInput(e.target.value)}
-            placeholder="输入你的问题..."
+            placeholder={
+              autoMode
+                ? "输入问题，或输入 / 使用命令（/kb /write…）"
+                : "输入你的问题..."
+            }
             disabled={isStreaming}
             className="flex-1 rounded-xl border border-sakura-200 bg-white px-4 py-2 text-sm text-zinc-700 placeholder-sakura-300 focus:outline-none focus:ring-2 focus:ring-sakura-300 disabled:opacity-50"
           />

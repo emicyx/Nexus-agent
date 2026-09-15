@@ -1,4 +1,5 @@
 export type ChatEvent =
+  | { type: "routed_crew"; content: string; input?: { command: string | null } }
   | { type: "agent_thinking"; content: string; step: number; agent?: string }
   | { type: "thinking_token"; content: string; step?: number; agent?: string }
   | { type: "tool_call"; agent: string; tool: string; input?: string }
@@ -52,7 +53,7 @@ function handle401(): void {
 export async function* streamChat(
   message: string,
   signal?: AbortSignal,
-  opts: { crewId?: number; single?: boolean; sessionId?: string } = {},
+  opts: { crewId?: number; single?: boolean; sessionId?: string; mode?: "auto" | "manual" } = {},
 ): AsyncGenerator<ChatEvent> {
   const res = await fetch(`${API_BASE}/v1/chat/stream`, {
     method: "POST",
@@ -62,6 +63,7 @@ export async function* streamChat(
       crew_id: opts.crewId ?? null,
       single: opts.single ?? false,
       session_id: opts.sessionId ?? null,
+      mode: opts.mode ?? "manual",
     }),
     signal,
   });

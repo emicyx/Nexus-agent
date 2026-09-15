@@ -948,6 +948,25 @@ def invalidate_default_crew_id_cache() -> None:
     """Crew CRUD API 更新/删除默认 Crew 时调用，使缓存失效。"""
     global _default_crew_id_cache
     _default_crew_id_cache = None
+    _crew_id_by_name_cache.clear()
+
+
+# crew 名 → id 缓存（Auto 模式 route_v0 决策后的名字解析，TTL 同默认 crew）
+_crew_id_by_name_cache: dict[str, tuple[int | None, float]] = {}
+
+
+async def get_crew_id_by_name(name: str) -> int | None:
+    """按 crew 名解析 id（带 TTL 缓存）。crew 不存在返回 None。"""
+    now = time.perf_counter()
+    cached = _crew_id_by_name_cache.get(name)
+    if cached is not None and now - cached[1] < _DEFAULT_CREW_ID_TTL:
+        return cached[0]
+    async with AsyncSessionLocal() as session:
+        stmt = select(CrewConfig).where(CrewConfig.name == name)
+        crew = (await session.execute(stmt)).scalar_one_or_none()
+        crew_id = crew.id if crew else None
+    _crew_id_by_name_cache[name] = (crew_id, now)
+    return crew_id
 
 
 async def run_crew_chat(

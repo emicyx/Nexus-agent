@@ -14,6 +14,7 @@ from pathlib import Path
 
 # 后端事件全集（以 backend/app/core/events.py 文档字符串 + factory.py 推送点为准）
 BACKEND_EVENT_TYPES = {
+    "routed_crew",  # v2 R0：Auto 模式路由决策（chat.py 推送，流首事件）
     "agent_thinking",
     "thinking_token",
     "tool_call",

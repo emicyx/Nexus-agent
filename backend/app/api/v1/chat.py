@@ -2,6 +2,7 @@
 import asyncio
 import contextlib
 import logging
+from typing import Literal
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import StreamingResponse
@@ -28,7 +29,13 @@ from app.core.token_budget import (
     ensure_budget_available,
     unbind_token_session,
 )
-from app.crews.factory import get_default_crew_id, run_crew_chat, run_single_agent_chat
+from app.crews.factory import (
+    get_crew_id_by_name,
+    get_default_crew_id,
+    run_crew_chat,
+    run_single_agent_chat,
+)
+from app.crews.route_v0 import route_message
 from app.db.session import AsyncSessionLocal
 from app.schemas.chat import ChatSessionCreate
 from app.services import chat_service
@@ -44,6 +51,9 @@ class ChatRequest(BaseModel):
     crew_id: int | None = None
     # single=true 时走无 DB 的单 Agent 回退
     single: bool = False
+    # v2 R0: Auto 模式由路由 v0 决定服务 crew（/cmd 前缀 + 默认 crew，纯确定性零 LLM）；
+    # manual（默认）保持 v1 行为——crew_id 显式指定或缺省默认 crew。二者互斥。
+    mode: Literal["auto", "manual"] = "manual"
 
 
 async def _ensure_session(
@@ -93,16 +103,45 @@ async def chat_stream(req: ChatRequest, request: Request):
     queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue(maxsize=settings.SSE_QUEUE_MAXSIZE)
     loop = asyncio.get_running_loop()
 
-    # 解析 crew_id：single 模式优先，否则用传入 crew_id 或默认 crew
-    crew_id = req.crew_id
-    if crew_id is None and not req.single:
-        crew_id = await get_default_crew_id()
+    # 解析 crew_id 与实际送入 crew 的消息：
+    # - auto（v2 R0）：路由 v0 决定 crew（/cmd 前缀解析 + 默认 crew，纯确定性零 LLM），
+    #   命令前缀从消息中剥离；
+    # - manual（v1 现状）：single 模式优先，否则用传入 crew_id 或默认 crew
+    if req.mode == "auto":
+        if req.crew_id is not None or req.single:
+            raise HTTPException(
+                status_code=400,
+                detail="mode=auto 与 crew_id/single 互斥：Auto 模式由路由决定服务的 crew",
+            )
+        decision = route_message(req.message)
+        if decision.error:
+            raise HTTPException(status_code=400, detail=decision.error)
+        crew_id = await get_crew_id_by_name(decision.crew_name)
+        if crew_id is None:
+            raise HTTPException(
+                status_code=503,
+                detail=f"路由目标 crew（{decision.crew_name}）不存在，请检查种子数据",
+            )
+        message = decision.message
+        # routed_crew 事件：Auto 模式下告知前端实际服务的 crew（透明度与纠错入口）
+        await queue.put(
+            AgentEvent(
+                type="routed_crew",
+                content=decision.crew_name,
+                input={"command": decision.command},
+            )
+        )
+    else:
+        crew_id = req.crew_id
+        if crew_id is None and not req.single:
+            crew_id = await get_default_crew_id()
+        message = req.message
 
     # Week 11+: 确保 DB session 存在（首次发消息时 lazy 创建）
     db_session_id: int | None = None
     if req.session_id and crew_id is not None and not req.single:
         try:
-            db_session_id = await _ensure_session(req.session_id, crew_id, req.message)
+            db_session_id = await _ensure_session(req.session_id, crew_id, message)
         except Exception:
             logger.exception("ensure_session failed (非致命)")
 
@@ -116,9 +155,9 @@ async def chat_stream(req: ChatRequest, request: Request):
             await ensure_budget_available()
             if req.single or crew_id is None:
                 # 无 DB 配置时回退到单 Agent
-                await run_single_agent_chat(req.message, queue, loop)
+                await run_single_agent_chat(message, queue, loop)
             else:
-                await run_crew_chat(crew_id, req.message, queue, loop, session_id=req.session_id)
+                await run_crew_chat(crew_id, message, queue, loop, session_id=req.session_id)
         except RunCancelledError:
             # A1：客户端已断连，事件无处投递，静默收尾即可
             logger.info("run_cancelled: run_id=%s session=%s", run_id, req.session_id)

@@ -5,6 +5,7 @@ SSE 事件协议：
     data: <json>
 
 事件类型：
+    routed_crew         - Auto 模式路由决策（content=实际服务的 crew 名, input含command或None）
     agent_thinking      - Agent 思考步骤（content=思考文本, agent=Agent角色, step=序号）
     thinking_token      - Agent 思考 streaming token（content=单个/少量 token, agent=角色, step=序号）
     tool_call           - 工具调用开始（agent, tool, input）

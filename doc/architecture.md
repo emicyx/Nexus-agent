@@ -61,15 +61,21 @@ Nexus 是一个基于 CrewAI 的多智能体 Web 平台，核心目标是**将 C
 ### 4.1 对话流（SSE 闭环）
 
 ```
-用户输入 → POST /v1/chat/stream {message, crew_id, session_id}
+用户输入 → POST /v1/chat/stream {message, crew_id, session_id, mode}
+  → [mode=auto] 路由 v0（crews/route_v0.py，纯确定性零 LLM）：
+      /cmd 前缀解析（/kb /write /ingest → 对应 crew，剥离前缀）
+      无前缀 → 默认 crew（researcher_writer）
+      未知命令/空内容 → 400（含可用命令清单，不进 LLM）
+      → SSE 首事件 routed_crew（content=crew 名, input.command）告知前端实际服务 crew
+  → [mode=manual，v1 现状] crew_id 显式指定或缺省默认 crew
   → 三层记忆读路径：
       ① KB 预注入：embedding 相似度 ≥0.65 的知识库片段 top-2
       ② LTM：user_memories 表语义检索用户偏好/经验
       ③ STM：chat_messages 滑动窗口 + 滚动摘要（chat_session_summary）
   → CrewFactory.build_crew_from_db() 从 DB 装配 Crew
   → Crew.akickoff() 异步执行
-  → 事件（thinking_token / tool_call / delegation / ...）→ asyncio.Queue → SSE
-  → 前端 useChat 消费 SSE → 实时渲染
+  → 事件（routed_crew / thinking_token / tool_call / delegation / ...）→ asyncio.Queue → SSE
+  → 前端 useChat 消费 SSE → 实时渲染（routed_crew 渲染为回答气泡上的路由徽标）
   → final_answer → done
   → 后台 fire-and-forget：滚动摘要刷新 + LTM 记忆提取（qwen-turbo）
 ```
@@ -113,6 +119,31 @@ Agent 调用 HumanApprovalTool._run()
   融合：RRF (k=60) → top_k
 ```
 
+### 4.5 v2 数据流（R0 起：助手模式与命令路由）
+
+v2 把系统从"Crew 聊天平台"转为"常驻个人助理"。R0 落地第一条增量数据流——**助手模式（Auto）**，后续 Slice（S1 定时任务 → IM 推送 / S3 IM 入站问答）在此之上叠加：
+
+```
+Web /chat（默认 Auto 模式）
+  输入 / 唤起命令列表（前端 lib/commands.ts 镜像 route_v0.COMMAND_CREW_MAP，
+  按 crew 目录过滤：crew 存在才展示其命令）
+  → POST /v1/chat/stream {message, mode:"auto"}   ← 不传 crew_id（与 auto 互斥）
+  → route_v0.route_message() 纯函数决策（确定性、零 LLM、零 DB）
+      ├─ "/kb xxx"   → knowledge_qa        （消息剥离前缀后送入）
+      ├─ "/write xx" → iterative_write_crew
+      ├─ "/ingest x" → web_ingest_crew
+      ├─ 无前缀      → researcher_writer（默认助手）
+      └─ 未知命令/空内容 → 400 + 可用命令清单
+  → factory.get_crew_id_by_name() 解析 id（TTL 缓存，同默认 crew 模式）
+  → ChatSession 绑定到路由命中的 crew（crew_id 硬绑定，S3 前不动）
+  → SSE 首事件 routed_crew → 前端渲染路由徽标（/kb → knowledge_qa）
+  → 此后与 4.1 对话流完全相同（同一执行引擎，无第二条执行路径）
+
+开发者模式（前端开关，localStorage 持久）：恢复 v1 手动 crew 下拉，走 mode=manual。
+```
+
+设计约束（v2 执行计划 §3b）：路由 v0 必须保持纯确定性零 LLM；LLM 路由器属解锁表组件，触发证据成立才建。crew 目录退役（team_orchestrator / safety_check）由 seed 幂等同步删除（不只 upsert），依赖行靠 DB 级 FK CASCADE 清理。
+
 ---
 
 ## 五、SSE 事件字典（前后端契约）
@@ -121,6 +152,7 @@ Agent 调用 HumanApprovalTool._run()
 
 | 事件 | 载荷 | 前端消费 | 说明 |
 |---|---|---|---|
+| `routed_crew` | content, input{command} | ✅ | Auto 模式路由决策（v2 R0）：content=实际服务的 crew 名，command=命中的 /cmd 或 null；流首事件 |
 | `agent_thinking` | content, step, agent | ✅ | 思考步骤（整段） |
 | `thinking_token` | content, step, agent | ✅ | 思考流式 token（STREAMING_WITH_TOOLS_ENABLED） |
 | `tool_call` | agent, tool, input | ✅ | 工具调用开始 |
@@ -203,7 +235,9 @@ UserMemory (user_id, content, embedding Vector, source_session_id)  # LTM，迁�
 
 Alembic 迁移 0001-0007。启动时 `create_all + ensure_seed` 自动建表/种子（幂等）；Alembic 迁移**不会自动执行**，改表结构后需手动 `alembic upgrade head` 对齐。
 
-种子 Crew：`researcher_writer`（默认，sequential）、`knowledge_qa`、`safety_check`、`safety_review`、`team_orchestrator`（hierarchical）、`web_ingest_crew`（hierarchical，URL→markdown→审阅→入库）。
+种子 Crew（v2 R0 目录）：`researcher_writer`（默认，sequential，Auto 模式默认入口）、`knowledge_qa`（/kb）、`web_ingest_crew`（hierarchical，URL→markdown→审阅→入库，/ingest）、`iterative_write_crew`（hierarchical，写作-评审循环，/write）。
+
+已退役（v2 R0，seed 幂等同步删除存量）：`team_orchestrator`（职责被助手 shell 取代）、`safety_check`（纯 demo；HITL 由 hook + 测试保证）。退役 crew 的会话/消息/记忆经 FK CASCADE 一并清理。
 
 ---
 

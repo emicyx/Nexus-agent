@@ -15,37 +15,48 @@ function generateSessionId(): string {
 
 const SESSION_STORAGE_PREFIX = "nexus:session_uuid:";
 
-function loadStoredSessionUuid(crewId: number | null): string | null {
-  if (crewId == null) return null;
+// 会话作用域：Auto 模式固定 "auto" 命名空间（路由后端决定，前端无固定 crew）；
+// manual 模式按 crew 隔离（v1 现状）。null = 无持久会话（未选 crew 的 manual）。
+function scopeKeyOf(mode: ChatMode, crewId: number | null): string | null {
+  if (mode === "auto") return "auto";
+  return crewId != null ? String(crewId) : null;
+}
+
+function loadStoredSessionUuid(scopeKey: string | null): string | null {
+  if (scopeKey == null) return null;
   try {
-    const key = `${SESSION_STORAGE_PREFIX}${crewId}`;
-    return localStorage.getItem(key);
+    return localStorage.getItem(`${SESSION_STORAGE_PREFIX}${scopeKey}`);
   } catch {
     return null;
   }
 }
 
-function storeSessionUuid(crewId: number | null, uuid: string) {
-  if (crewId == null) return;
+function storeSessionUuid(scopeKey: string | null, uuid: string) {
+  if (scopeKey == null) return;
   try {
-    localStorage.setItem(`${SESSION_STORAGE_PREFIX}${crewId}`, uuid);
+    localStorage.setItem(`${SESSION_STORAGE_PREFIX}${scopeKey}`, uuid);
   } catch {
     // localStorage 不可用（隐私模式）忽略
   }
 }
 
-function clearStoredSessionUuid(crewId: number | null) {
-  if (crewId == null) return;
+function clearStoredSessionUuid(scopeKey: string | null) {
+  if (scopeKey == null) return;
   try {
-    localStorage.removeItem(`${SESSION_STORAGE_PREFIX}${crewId}`);
+    localStorage.removeItem(`${SESSION_STORAGE_PREFIX}${scopeKey}`);
   } catch {
     // ignore
   }
 }
 
+export type ChatMode = "auto" | "manual";
+
 export interface Message {
   role: "user" | "assistant";
   content: string;
+  /** routed_crew 徽标：Auto 模式下该条回答实际服务的 crew（manual 模式无） */
+  routedCrew?: string;
+  routedCommand?: string | null;
 }
 
 /** 协作步骤：Agent 思考、流式思考、工具调用/结果、委派、任务完成 */
@@ -86,7 +97,9 @@ export interface Approval {
   comment?: string;
 }
 
-export function useChat(crewId?: number | null) {
+export function useChat(crewId?: number | null, opts: { mode?: ChatMode } = {}) {
+  const mode: ChatMode = opts.mode ?? "manual";
+  const scopeKey = scopeKeyOf(mode, crewId ?? null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [steps, setSteps] = useState<CollabStep[]>([]);
   const [approvals, setApprovals] = useState<Approval[]>([]);
@@ -94,6 +107,8 @@ export function useChat(crewId?: number | null) {
   const [error, setError] = useState<string | null>(null);
   const [errorKind, setErrorKind] = useState<string | null>(null);
   const [currentSessionUuid, setCurrentSessionUuid] = useState<string | null>(null);
+  // 最近一次 Auto 路由结果（供页面展示当前服务 crew / 派生 crewInfo）
+  const [lastRoutedCrew, setLastRoutedCrew] = useState<{ crew: string; command: string | null } | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const sessionIdRef = useRef<string>(generateSessionId());
   const lastMessageRef = useRef<string>("");
@@ -107,9 +122,10 @@ export function useChat(crewId?: number | null) {
     };
   }, []);
 
-  // crew 切换时：从 localStorage 恢复该 crew 的最后 session_uuid，并加载历史消息
+  // 会话作用域切换时：从 localStorage 恢复该作用域的最后 session_uuid，并加载历史消息
   useEffect(() => {
-    if (crewId == null) {
+    setLastRoutedCrew(null);
+    if (scopeKey == null) {
       setMessages([]);
       setSteps([]);
       setApprovals([]);
@@ -119,7 +135,7 @@ export function useChat(crewId?: number | null) {
       sessionIdRef.current = generateSessionId();
       return;
     }
-    const storedUuid = loadStoredSessionUuid(crewId);
+    const storedUuid = loadStoredSessionUuid(scopeKey);
     if (storedUuid) {
       sessionIdRef.current = storedUuid;
       setCurrentSessionUuid(storedUuid);
@@ -132,7 +148,7 @@ export function useChat(crewId?: number | null) {
           // session 不存在（可能 DB 已清）→ 重置
           sessionIdRef.current = generateSessionId();
           setCurrentSessionUuid(null);
-          clearStoredSessionUuid(crewId);
+          clearStoredSessionUuid(scopeKey);
           setMessages([]);
         });
     } else {
@@ -144,7 +160,7 @@ export function useChat(crewId?: number | null) {
     setApprovals([]);
     setError(null);
     setErrorKind(null);
-  }, [crewId]);
+  }, [scopeKey]);
 
   const send = useCallback(async (text: string) => {
     if (!text.trim() || isStreaming) return;
@@ -153,6 +169,7 @@ export function useChat(crewId?: number | null) {
     setErrorKind(null);
     setSteps([]);
     setApprovals([]);
+    setLastRoutedCrew(null);
     setMessages((prev) => [
       ...prev,
       { role: "user", content: text },
@@ -177,10 +194,27 @@ export function useChat(crewId?: number | null) {
       let assistantText = "";
 
       for await (const evt of streamChat(text, controller.signal, {
-        crewId: crewId ?? undefined,
+        crewId: mode === "manual" ? (crewId ?? undefined) : undefined,
         sessionId: sessionIdRef.current,
+        mode,
       })) {
         switch (evt.type) {
+          case "routed_crew":
+            // Auto 模式路由决策：记录徽标信息（渲染进当前回答气泡）
+            setLastRoutedCrew({ crew: evt.content, command: evt.input?.command ?? null });
+            setMessages((prev) => {
+              const next = [...prev];
+              const last = next[next.length - 1];
+              if (last && last.role === "assistant") {
+                next[next.length - 1] = {
+                  ...last,
+                  routedCrew: evt.content,
+                  routedCommand: evt.input?.command ?? null,
+                };
+              }
+              return next;
+            });
+            break;
           case "agent_thinking":
             // 如果之前有同 agent+step 的流式 thinking，将其标记为完成
             for (let i = collab.length - 1; i >= 0; i--) {
@@ -347,8 +381,8 @@ export function useChat(crewId?: number | null) {
         }
       }
       // 首条消息发送成功后，session_uuid 才真正落到 DB。这里持久化到 localStorage。
-      if (crewId != null) {
-        storeSessionUuid(crewId, sessionIdRef.current);
+      if (scopeKey != null) {
+        storeSessionUuid(scopeKey, sessionIdRef.current);
         setCurrentSessionUuid(sessionIdRef.current);
       }
     } catch (err) {
@@ -370,7 +404,7 @@ export function useChat(crewId?: number | null) {
       setIsStreaming(false);
       abortRef.current = null;
     }
-  }, [isStreaming, crewId]);
+  }, [isStreaming, crewId, mode, scopeKey]);
 
   const stop = useCallback(() => {
     abortRef.current?.abort();
@@ -394,6 +428,7 @@ export function useChat(crewId?: number | null) {
     setApprovals([]);
     setError(null);
     setErrorKind(null);
+    setLastRoutedCrew(null);
     sessionIdRef.current = generateSessionId();
     setCurrentSessionUuid(null);
     // 注意：不清除 localStorage，等用户真正发消息后再覆盖
@@ -421,14 +456,14 @@ export function useChat(crewId?: number | null) {
         );
         sessionIdRef.current = sessionUuid;
         setCurrentSessionUuid(sessionUuid);
-        if (crewId != null) {
-          storeSessionUuid(crewId, sessionUuid);
+        if (scopeKey != null) {
+          storeSessionUuid(scopeKey, sessionUuid);
         }
       } catch (e) {
         setError(e instanceof Error ? e.message : String(e));
       }
     },
-    [isStreaming, crewId],
+    [isStreaming, scopeKey],
   );
 
   const resolveApproval = useCallback(
@@ -503,6 +538,7 @@ export function useChat(crewId?: number | null) {
     error,
     errorKind,
     currentSessionUuid,
+    lastRoutedCrew,
     send,
     stop,
     retry,

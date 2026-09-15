@@ -1,6 +1,10 @@
 """种子数据：写入默认 Researcher + Writer Crew + 工具 + Skills
 
 幂等：按 name 去重，已存在则跳过。启动时调用 ensure_seed()。
+
+v2 R0 起支持退役：RETIRED_CREWS / RETIRED_AGENTS 中的条目每次同步时从存量 DB
+删除（不只 upsert），依赖行（tasks / crew_agents / chat_sessions 及其消息 /
+user_memories）由 DB 级 FK CASCADE 清理。
 """
 import logging
 
@@ -12,6 +16,50 @@ from app.models import AgentConfig, CrewConfig, OutputSchemaConfig, SkillConfig,
 from app.models.association import CrewAgent
 
 logger = logging.getLogger("seed")
+
+# v2 R0 退役清单：
+# - team_orchestrator：职责被助手 shell（route_v0 + 默认 crew）取代，
+#   crew 内 LLM manager 即兴编排慢、贵、不可测（调研 §8.3）
+# - safety_check：纯 demo crew；HITL 机制由 hook + 单测/集成测试保证
+RETIRED_CREWS = ["team_orchestrator", "safety_check"]
+# 仅被退役 crew 独占使用的 agent（researcher/writer/kb_agent 为共享资产，不动）
+RETIRED_AGENTS = ["orchestrator", "safety_agent"]
+
+
+async def _retire_crew(session: AsyncSession, name: str) -> bool:
+    """删除存量 DB 中的退役 crew（幂等：不存在即无事）。"""
+    stmt = select(CrewConfig).where(CrewConfig.name == name)
+    crew = (await session.execute(stmt)).scalar_one_or_none()
+    if crew is None:
+        return False
+    await session.delete(crew)  # tasks 走 ORM delete-orphan；会话/记忆走 DB CASCADE
+    await session.flush()
+    logger.info(f"seed: retired crew {name} (id={crew.id})")
+    return True
+
+
+async def _retire_agent(session: AsyncSession, name: str) -> bool:
+    """删除退役 crew 独占的 agent。防御：仍被任何 crew 引用时不删。"""
+    stmt = select(AgentConfig).where(AgentConfig.name == name)
+    agent = (await session.execute(stmt)).scalar_one_or_none()
+    if agent is None:
+        return False
+    ref = await session.execute(
+        select(CrewAgent.c.crew_id).where(CrewAgent.c.agent_id == agent.id).limit(1)
+    )
+    if ref.first() is not None:
+        logger.warning(f"seed: agent {name} 仍被 crew 引用，跳过退役删除")
+        return False
+    mgr = await session.execute(
+        select(CrewConfig.id).where(CrewConfig.manager_agent_id == agent.id).limit(1)
+    )
+    if mgr.first() is not None:
+        logger.warning(f"seed: agent {name} 仍是某 crew 的 manager，跳过退役删除")
+        return False
+    await session.delete(agent)
+    await session.flush()
+    logger.info(f"seed: retired agent {name} (id={agent.id})")
+    return True
 
 
 async def _get_or_create_tool(
@@ -258,6 +306,12 @@ async def _get_or_create_schema(
 async def ensure_seed() -> None:
     """写入默认 Researcher+Writer Crew（幂等）。"""
     async with AsyncSessionLocal() as session:
+        # ── v2 R0：退役清理（先删后建，保证存量 DB 同步收敛到新目录）──────
+        for crew_name in RETIRED_CREWS:
+            await _retire_crew(session, crew_name)
+        for agent_name in RETIRED_AGENTS:
+            await _retire_agent(session, agent_name)
+
         # ── OutputSchema 模板（Week 13+）──────
         research_material_schema = await _get_or_create_schema(
             session,
@@ -330,6 +384,8 @@ async def ensure_seed() -> None:
             tool_key="rag_search",
             description="知识库语义检索工具，在已上传的私有文档中查找相关内容",
         )
+        # human_approval 工具种子保留（v2 R0 工具目录全保留）：
+        # 种子 agent 不再挂载（safety_check 已退役），供用户自建 agent 配置
         approval_tool = await _get_or_create_tool(
             session,
             name="human_approval",
@@ -366,6 +422,12 @@ async def ensure_seed() -> None:
                 "涉及公开网络信息时用百度搜索（search_web）。"
                 "你会先用合适的工具查询关键信息，再用中间结果保存工具记录要点，"
                 "最后把整理好的素材交给撰稿人。"
+                "文件请求纪律（v2 R0，2026-09-14 重锚发现）：用户要求查看/读取/总结"
+                "某个具体文件（如 outputs/weekly-report.md）时，这是文件系统请求——"
+                "你没有读取文件系统的工具，必须如实说明无法读取该文件并结束检索，"
+                "严禁检索知识库找'最接近/相似'的文档顶替该文件进行总结："
+                "知识库文档与文件系统里的文件是两回事，文件读不到就是读不到，"
+                "更不得编造该文件的内容。"
             ),
             tools=[search_tool, intermediate_tool, rag_tool],
             max_iter=8,
@@ -415,24 +477,8 @@ async def ensure_seed() -> None:
             tools=[rag_tool],
             max_iter=6,
         )
-        # Week 5: 安全操作员 Agent（挂 human_approval，用于 HITL 测试）
-        safety_agent = await _get_or_create_agent(
-            session,
-            name="safety_agent",
-            role="安全操作员",
-            goal="在执行高危操作前，主动调用 human_approval 工具请求人类审批",
-            backstory=(
-                "你是一名严谨的安全操作员。"
-                "当用户要求执行可能造成数据丢失、发送外部消息、"
-                "修改重要配置等不可逆操作时，"
-                "你必须先调用 human_approval 工具，"
-                "描述操作内容、风险等级和理由，等待人类审批后再继续。"
-                "若被拒绝，向用户说明并建议替代方案。"
-                "若操作是安全只读的，可直接执行。"
-            ),
-            tools=[approval_tool],
-            max_iter=6,
-        )
+        # Week 5: safety_check crew 已于 v2 R0 退役（RETIRED_CREWS）；
+        # human_approval 工具保留（hooks 体系与用户自建 agent 仍可挂载）
 
         # Crew
         crew = await _get_or_create_crew(
@@ -446,12 +492,6 @@ async def ensure_seed() -> None:
             name="knowledge_qa",
             description="纯知识库问答 Crew（仅 RAG，不联网），用于 Week 4 对照测试",
             agents=[kb_agent],
-        )
-        safety_crew = await _get_or_create_crew(
-            session,
-            name="safety_check",
-            description="HITL 安全审批 Crew（Week 5 测试），高危操作前请求人类批准",
-            agents=[safety_agent],
         )
 
         # Tasks
@@ -467,7 +507,11 @@ async def ensure_seed() -> None:
                 "2. 私有内容用 rag_search 检索知识库，公开内容用 search_web 联网搜索；"
                 "知识库结果只有标题/目录时换更具体关键词或用 document_id 多轮深挖\n"
                 "3. 用中间结果保存工具记录要点\n"
-                "4. 输出整理后的素材摘要，供撰稿人使用"
+                "4. 输出整理后的素材摘要，供撰稿人使用\n"
+                "5. 文件请求（v2 R0）：用户要求查看/读取/总结某个具体文件"
+                "（如 outputs/xxx.md）时，你没有文件读取工具——素材中如实记录"
+                "'无法读取该文件（无文件读取能力）'，不得检索知识库文档顶替该文件、"
+                "不得把任何知识库文档当作该文件的内容"
             ),
             expected_output="一份结构化的素材摘要，包含关键事实和来源",
             position=0,
@@ -520,88 +564,9 @@ async def ensure_seed() -> None:
             position=0,
         )
 
-        # Week 5: safety_check Crew 的单 Task
-        await _get_or_create_task(
-            session,
-            crew=safety_crew,
-            agent=safety_agent,
-            name="safety_review",
-            description=(
-                "处理用户请求，必要时请求人类审批：\n\n{user_input}\n\n"
-                "要求：\n"
-                "1. 判断操作是否属于高危（数据删除、发送外部消息、不可逆修改）\n"
-                "2. 若高危，调用 human_approval 工具，说明操作内容、风险等级和理由\n"
-                "3. 若被批准，向用户确认已获授权；若被拒绝，说明原因并建议替代方案\n"
-                "4. 若操作安全，直接处理\n"
-                "5. 用中文回答"
-            ),
-            expected_output="操作已获人类批准并执行，或被拒绝的说明，或安全操作的直接结果",
-            position=0,
-        )
-
-        # Week 6: hierarchical 编排 Crew
-        orchestrator = await _get_or_create_agent(
-            session,
-            name="orchestrator",
-            role="团队主管",
-            goal="分析用户意图，将复杂问题拆解为子任务，分配给最合适的子 agent（研究员/撰稿人/知识库助手）协作出完整回答",
-            backstory=(
-                "你是一位经验丰富的团队主管。收到用户问题后，你会先分析问题涉及哪些领域"
-                "（公开网络信息、私有知识库、需要撰写整理），"
-                "然后把检索、写作等子任务分配给对应的子 agent。"
-                "你会汇总各子 agent 的产出，形成最终回答。"
-                "文件请求纪律（2026-09-09 修复）：用户要求查看/读取/总结某个具体文件"
-                "（如 outputs/weekly-report.md）时，这是文件系统请求——让子 agent "
-                "用文件读取工具按字面路径读取。若文件不存在，如实告知用户"
-                "'该文件不存在'（可附 outputs 目录实际清单）并结束任务，"
-                "严禁转而检索知识库找'最接近/相似'的文档顶替该文件进行总结："
-                "知识库文档与文件系统里的文件是两回事，文件不存在就是不存在。"
-            ),
-            tools=[],
-            max_iter=10,
-        )
-        team_crew = await _get_or_create_crew(
-            session,
-            name="team_orchestrator",
-            description="层级编排 Crew：团队主管拆解任务，分配给研究员/撰稿人/知识库助手协作",
-            agents=[researcher, writer, kb_agent],
-            process_type="hierarchical",
-            manager_agent=orchestrator,
-        )
-        # hierarchical 模式下 task 可绑 agent 用于 output_pydantic 注入（agent 仅作 schema 提示，manager 可覆盖分配）
-        research_gather_task = await _get_or_create_task(
-            session,
-            crew=team_crew,
-            agent=researcher,
-            name="research_and_gather",
-            description=(
-                "针对用户问题进行信息收集：\n\n{user_input}\n\n"
-                "要求：\n"
-                "1. 判断问题属于私有知识库内容还是公开网络信息\n"
-                "2. 私有内容用 rag_search 检索知识库，公开内容用 search_web 联网搜索\n"
-                "3. 用中间结果保存工具记录要点\n"
-                "4. 输出整理后的素材摘要"
-            ),
-            expected_output="一份结构化的素材摘要，包含关键事实和来源",
-            position=0,
-            output_schema_id=research_material_schema.id,
-        )
-        await _get_or_create_task(
-            session,
-            crew=team_crew,
-            name="write_answer",
-            description=(
-                "基于收集的素材，针对用户问题撰写最终回答：\n\n"
-                "原始问题：{user_input}\n\n"
-                "要求：\n"
-                "1. 语言流畅、条理清晰\n"
-                "2. 如有多种观点请客观呈现\n"
-                "3. 用中文回答"
-            ),
-            expected_output="一段简洁、准确、结构清晰的中文回答",
-            position=1,
-            context_task_ids=[research_gather_task.id],
-        )
+        # Week 6: team_orchestrator crew 已于 v2 R0 退役（RETIRED_CREWS）；
+        # 编排职责由助手 shell（route_v0 + 各专职 crew）取代。
+        # hierarchical 编排链路保留形态见 web_ingest_crew / iterative_write_crew。
 
         # ── Week 10：网页内容编排入库 Crew（Orchestrator 模式）──────────────
         # 工具
@@ -1082,6 +1047,6 @@ async def ensure_seed() -> None:
         await session.commit()
     logger.info(
         "seed: default crews ensured "
-        "(researcher_writer + knowledge_qa + safety_check + team_orchestrator + web_ingest_crew "
-        "+ iterative_write_crew)"
+        "(researcher_writer + knowledge_qa + web_ingest_crew + iterative_write_crew; "
+        f"retired: {', '.join(RETIRED_CREWS)})"
     )

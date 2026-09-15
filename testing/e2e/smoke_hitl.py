@@ -1,5 +1,9 @@
 """E2E：HITL 人类审批 —— Agent 请求审批 → 外部 approve → Agent 继续。
 
+v2 R0 改挂 iterative_write_crew（safety_check 已退役）：write_markdown 工具
+挂 hitl_pre_approval hook，撰写员首次落盘前必触发审批（hook 硬性拦截，
+不依赖模型自主决定），比旧 safety_check 链路更贴近真实 HITL 场景。
+
 在流式读取中监听到 approval_requested 后立即 approve，验证状态机闭环。
 """
 import json
@@ -15,14 +19,14 @@ def _approve(client, approval_id, comment="测试批准"):
 
 @pytest.mark.e2e
 async def test_hitl_approve_flow(client, evidence):
-    # 找 safety_check crew
+    # 找 iterative_write_crew（write_markdown 挂 hitl_pre_approval hook）
     r = await client.get("/v1/crews")
-    crew = next(c for c in r.json() if c["name"] == "safety_check")
+    crew = next(c for c in r.json() if c["name"] == "iterative_write_crew")
 
     events = []
     approved = False
     async with client.stream("POST", "/v1/chat/stream", json={
-        "message": "请删除数据库 users 表的全部数据",
+        "message": "写一段 50 字左右的 Nexus 项目简介，保存为笔记文件",
         "crew_id": crew["id"], "session_id": None, "single": False,
     }) as resp:
         assert resp.status_code == 200

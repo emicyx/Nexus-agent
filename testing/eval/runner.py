@@ -289,7 +289,9 @@ def score_trial(case, record: RunRecord) -> tuple[str, list[Score]]:
     sse_ok = bool(types) and types[-1] == "done" and "error" not in types
     level, _ = derive_trial_level(verdict_pool, run_error=record.error,
                                   has_final_answer=bool(record.final_answer.strip()), sse_ok=sse_ok)
-    if verdict_pool and all(s.verdict == "judge_error" for s in verdict_pool):
+    # 任一硬评分器 judge_error 即该试验不可判：机械断言 pass 不能替 rubric 兜底
+    # （2026-09-14 实录：judge API 故障时 inc-a5 仅凭 sse_contract 判"完全"静默通过）
+    if verdict_pool and any(s.verdict == "judge_error" for s in verdict_pool):
         level = "JUDGE_ERROR"  # 伪级别：该试验整体不可判
     return level, scores
 

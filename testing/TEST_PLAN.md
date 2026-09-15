@@ -56,8 +56,8 @@
 |---|---|---|
 | `smoke_single_chat.py` | 默认 researcher_writer「1+1等于几」 | 完整 SSE 闭环 + final_answer 非空 |
 | `smoke_rag.py` | 上传文档→提问 | Agent 自主调 `rag_search` 且回答有依据 |
-| `smoke_hitl.py` | safety_check 触发审批 | `approval_requested`→approve→继续 |
-| `smoke_hierarchical.py` | team_orchestrator | manager 决策→作答 |
+| `smoke_hitl.py` | iterative_write_crew 触发审批（v2 R0 改挂，safety_check 已退役；write_markdown hook） | `approval_requested`→approve→继续 |
+| `smoke_hierarchical.py` | iterative_write_crew（v2 R0 改挂，team_orchestrator 已退役） | manager 决策→作答 |
 | `smoke_hot_reload.py` | PUT 改 goal→再对话 | 回答风格变化 |
 | `smoke_web_ingest.py` | web_ingest_crew+URL | manager→reader→writer→审阅→入库 |
 
