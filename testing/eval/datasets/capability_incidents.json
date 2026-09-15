@@ -1,8 +1,8 @@
 {
   "name": "capability_incidents",
-  "version": "2026.09.14",
+  "version": "2026.09.15",
   "description": "事故回流能力集：三次线上事故（2026-08-25 路径幻觉 / tool-call 泄漏 / 2026-08-26 SOP02 检索失败）各固化 4 条用例。C 组依赖 kb_seed/mod-dev-sop 语料已入库。",
-  "default_trials": 3,
+  "default_trials": 2,
   "meta": {
     "attribution_map": {
       "inc-a*": "incident:2026-08-25-path-hallucination → 归因:轨迹/护栏",
@@ -16,7 +16,8 @@
       "用例与 crew 工具配置必须匹配（conformance 层原则）：a1/a2 需 view_file → iterative_write_crew；a3 需 fetch_url → web_ingest_crew；b4 需 write_markdown → markdown_write",
       "Windows 开发机 bind mount：outputs/ 下子目录（raw、web_ingest）需宿主机侧预建（容器内 appuser 无法在挂载目录建子目录，Errno 13），同 c3b68c6 修复的线上场景",
       "2026-09-09 发现 #2（真系统 bug，本用例保持 RED 直至修复）：markdown_write crew 流以 'TaskOutput validation error (raw)' 收尾、无 final_answer——疑似 output_pydantic patch 在该 crew 配置下的结构化输出校验缺陷，raw 证据 results/20260909-130954/raw/inc-b4_t0.json",
-      "2026-09-14 v2 R0 重锚（人工确认）：team_orchestrator/safety_check 退役（seed 幂等删除），inc-a5 改锚 researcher_writer（黄金答案=如实说明无文件读取能力或文件不存在，禁知识库文档顶替、禁编造），inc-b2 改锚 iterative_write_crew（保留的最长 hierarchical 编排链，写作触发 write_markdown HITL，runner 默认 auto-approve）"
+      "2026-09-14 v2 R0 重锚（人工确认）：team_orchestrator/safety_check 退役（seed 幂等删除），inc-a5 改锚 researcher_writer（黄金答案=如实说明无文件读取能力或文件不存在，禁知识库文档顶替、禁编造），inc-b2 改锚 iterative_write_crew（保留的最长 hierarchical 编排链，写作触发 write_markdown HITL，runner 默认 auto-approve）",
+      "2026-09-15 成本分层 v2026.09.15：全量 85 trial/164 万 token 偏贵——default_trials 3→2（修复验证的'完全×3'纪律改用 --trials 3 定点跑），inc-a3/inc-b3/inc-b4（单条 5 万+ token 写路径大户）case 级 trials=1；全部用例保持 tier=core（缺陷锚不砍）；里程碑全量跑法不变"
     ]
   },
   "cases": [
@@ -48,6 +49,7 @@
     },
     {
       "id": "inc-a3", "crew": "web_ingest_crew", "scenario": "边界", "intent": "fetch_url save_as 命名契约",
+      "trials": 1,
       "origin": "incident:2026-08-25-path-hallucination",
       "pre_state": { "clean_sandbox": true, "cleanup_new_documents": true },
       "input": { "message": "用 fetch_url 抓取 https://example.com/ 的内容保存下来（save_as 用 example-page），然后告诉我抓到的页面标题" },
@@ -90,6 +92,7 @@
     },
     {
       "id": "inc-b3", "crew": "web_ingest_crew", "scenario": "常规", "intent": "泄漏-入库链路+环境对账",
+      "trials": 1,
       "origin": "incident:2026-08-25-tool-call-leakage",
       "input": { "message": "把 https://example.com/ 这个网页的内容审阅后入库" },
       "scorers": [
@@ -100,6 +103,7 @@
     },
     {
       "id": "inc-b4", "crew": "markdown_write", "scenario": "常规", "intent": "泄漏-写作产物",
+      "trials": 1,
       "origin": "incident:2026-08-25-tool-call-leakage",
       "input": { "message": "写一份 200 字左右的 Nexus 混合检索机制说明，保存为 outputs/rag-note.md" },
       "scorers": [

@@ -1,7 +1,7 @@
 {
   "name": "rag_v3",
-  "version": "2026.09.14",
-  "description": "知识库问答能力集：迁移自 eval_rag v2 测试集（15 条 / 6 题型）。运行前语料须已入库（testing/eval_rag/reingest_docs.py 或手工上传）。2026.09.9 校准：语料措辞漂移修正（q06/q08/q15）+ phrases any-of 转述鲁棒化。2026.09.11 校准：q08 补词序变体（'psycopg2 同步/同步引擎/get_sync_redis'，来源归属 prompt 改变答案措辞结构）；q15 regex 降 weight 0 + llm_rubric 接管（regex 对'无任何内容表明…已实现'这类合法否定语境天然脆弱，复跑实录）。",
+  "version": "2026.09.15",
+  "description": "知识库问答能力集：迁移自 eval_rag v2 测试集（15 条 / 6 题型）。运行前语料须已入库（testing/eval_rag/reingest_docs.py 或手工上传）。2026.09.9 校准：语料措辞漂移修正（q06/q08/q15）+ phrases any-of 转述鲁棒化。2026.09.11 校准：q08 补词序变体（'psycopg2 同步/同步引擎/get_sync_redis'，来源归属 prompt 改变答案措辞结构）；q15 regex 降 weight 0 + llm_rubric 接管（regex 对'无任何内容表明…已实现'这类合法否定语境天然脆弱，复跑实录）。2026.09.15 成本分层：q05/q06/q09/q11/q14 常规检索题降 tier=full（同类 intent 由 q01-q04/q07/q10/q12/q13 继续覆盖；q04 语料归属、q08/q15 断言校准、q10/q13 rubric 权威样本保持 core）；default_trials 维持 2（单条 6k 便宜，保留稳定性信号）。",
   "default_trials": 2,
   "meta": {
     "origin": "testing/eval_rag/test_set.json (v2, 2026-08-02)",
@@ -55,6 +55,7 @@
     },
     {
       "id": "q05", "crew": "knowledge_qa", "scenario": "常规", "intent": "事实查询",
+      "tier": "full",
       "origin": "corpus:eval_rag-v2",
       "input": { "message": "项目基于哪个版本的 CrewAI？" },
       "scorers": [
@@ -64,6 +65,7 @@
     },
     {
       "id": "q06", "crew": "knowledge_qa", "scenario": "常规", "intent": "定义机制",
+      "tier": "full",
       "origin": "corpus:eval_rag-v2",
       "input": { "message": "hierarchical 模式下 manager_agent 有什么限制？" },
       "scorers": [
@@ -91,6 +93,7 @@
     },
     {
       "id": "q09", "crew": "knowledge_qa", "scenario": "常规", "intent": "列表枚举",
+      "tier": "full",
       "origin": "corpus:eval_rag-v2",
       "input": { "message": "把 CrewAI 搬到 Web 面临哪三大技术鸿沟？" },
       "scorers": [
@@ -110,6 +113,7 @@
     },
     {
       "id": "q11", "crew": "knowledge_qa", "scenario": "常规", "intent": "程序步骤",
+      "tier": "full",
       "origin": "corpus:eval_rag-v2",
       "input": { "message": "开发自定义工具需要遵循哪些步骤？" },
       "scorers": [
@@ -138,6 +142,7 @@
     },
     {
       "id": "q14", "crew": "knowledge_qa", "scenario": "常规", "intent": "性能事实",
+      "tier": "full",
       "origin": "corpus:eval_rag-v2",
       "input": { "message": "STM 短期记忆的压缩规则是什么？" },
       "scorers": [

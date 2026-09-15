@@ -98,6 +98,7 @@
 ### 1b.6 数据与评测
 
 - **R0 已完成重锚**（2026-09-14 人工确认）：inc-a5 → researcher_writer（A1）、inc-b2 → iterative_write_crew、q04 语料与参考文更新为 4 套团队；三数据集版本 v2026.09.14；**终版全绿基线 run 20260914-203506（36/36，TSR 100%）**，归档于 testing/eval/评测报告-20260909.md §十。
+- **成本分层 v2026.09.15**（全量 85 trial/164 万 token 偏贵的瘦身）：schema 增 tier 字段（core/full，缺省 core）+ runner `--tier`（缺省 core，进 fingerprint notes 防跨层对比）。core=日常缺省（29 用例/49 trial，缺陷锚一条不砍；同攻击面第二变体 rt-2/rt-6 与常规检索题 q05/q06/q09/q11/q14 降 full）；capability trials 3→2（写路径大户 inc-a3/b3/b4 单 trial）；redteam trials 2→1（安全断言硬门禁单 trial 判定）。里程碑验收跑 `--tier full`（36 用例/61 trial）。
 - KB / 会话 / 记忆 / 配置数据全保留；所有迁移只增不减。
 - markdown_write crew（用户自建，非 seed）已做收敛纪律修复（原值备份 `tmp-crew87-backup.json`）；**云端库需同步三处修改**（清单在评测报告 §十"补充"小节，已并入第 10 节收官步骤）。
 
@@ -141,7 +142,7 @@
 | `backend/alembic/versions/` | 迁移 0001–0009，下一个用 **0010**（S2） |
 | `backend/requirements.txt` | 依赖必须进这里并重建镜像（**教训 #6：不许只 docker cp 热部署**） |
 | `docker-compose.yml` | 容器（postgres pgvector+zhparser / redis / backend / frontend，**S1 加 napcat 第 5 容器**），不可变镜像；backend 与 napcat 同 compose 内网互访，OneBot 反向 WS 走内网不经公网 |
-| `testing/eval/runner.py` | 评测入口：EnvAdapter 走 HTTP 打真实栈、SSE、auto-approve、clean_sandbox/ingest_documents/cleanup_new_documents 封闭环境控制；`--base-url` 缺省 localhost:8000（**评测全量复跑留在本机跑**，服务器不为评测 burst 买单） |
+| `testing/eval/runner.py` | 评测入口：EnvAdapter 走 HTTP 打真实栈、SSE、auto-approve、clean_sandbox/ingest_documents/cleanup_new_documents 封闭环境控制；**--tier 缺省 core**（2026-09-15 成本分层：日常全量只跑防回归锚+安全不变量，29 用例/49 trial ≈ 80 万 token，约为 full 的一半；里程碑验收显式 `--tier full`；修复验证的"完全×3"用 `--trials 3` 定点）；`--base-url` 缺省 localhost:8000（**评测全量复跑留在本机跑**，服务器不为评测 burst 买单） |
 | `testing/eval/datasets/` | 数据集版本化（当前 **v2026.09.14**），scorer 8 种 + llm_rubric；judge_error 纪律：任一硬评分器故障即试验不可判（R0 #10 修复） |
 | `doc/上线部署手册.md` | 部署步骤（新能力上线后在此追加增量） |
 | `doc/运行账本.md` | 尚未创建；S1 起新建，记日期/用途/成本/备注与 7 天自用验证结果 |

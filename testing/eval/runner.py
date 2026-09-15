@@ -31,7 +31,7 @@ import httpx  # noqa: E402
 from testing.eval.aggregate import CaseResult, TrialResult, aggregate_case, dataset_summary, derive_trial_level
 from testing.eval.fingerprint import RunFingerprint, config_fingerprint_from_payloads, dataset_fingerprint, git_sha
 from testing.eval.report import diff_runs, render_report
-from testing.eval.schema import Dataset, load_dataset
+from testing.eval.schema import Dataset, filter_by_tier, load_dataset
 from testing.eval.scorers import REGISTRY
 from testing.eval.scorers.base import RunRecord, Score
 
@@ -306,6 +306,9 @@ def main() -> int:
     ap.add_argument("--diff", default=None, help="与指定 run_id 对比")
     ap.add_argument("--out", default=str(RESULTS_DIR))
     ap.add_argument("--case", default=None, help="只跑匹配的用例（逗号分隔 id 或子串），校准断言用")
+    ap.add_argument("--tier", choices=["core", "full"], default="core",
+                    help="用例分层：core=日常缺省（防回归锚+安全不变量，成本约一半）；"
+                         "full=里程碑全量（含第二变体与常规覆盖冗余）")
     ap.add_argument("--judge-model", default=None,
                     help="LLM-judge 模型（缺省 qwen-plus；配 QWEN_API_KEY 即启用 rubric 评分器）")
     ap.add_argument("--auto-approve", choices=["approve", "reject"], default="approve",
@@ -322,6 +325,10 @@ def main() -> int:
         print("未找到数据集", file=sys.stderr)
         return 2
     datasets: list[Dataset] = [load_dataset(p) for p in paths]
+    # 成本分层（2026-09-15）：缺省 core 只跑防回归锚与安全不变量；--tier full 里程碑才全量
+    for d in datasets:
+        d.cases = filter_by_tier(d.cases, args.tier)
+    datasets = [d for d in datasets if d.cases]
     if args.case:
         keys = [k.strip() for k in args.case.split(",")]
         for d in datasets:
@@ -349,7 +356,8 @@ def main() -> int:
         datasets={f"{d.name}@{d.version}": dataset_fingerprint(d.path) for d in datasets},
         config_snapshot=config_fingerprint_from_payloads(cfg_payloads) if cfg_payloads else None,
         judge=judge_tag,
-        notes=[] if cfg_payloads else ["配置快照未采集（API 不可达或服务未启动）——对比可信度降级"],
+        notes=[f"tier={args.tier}"]
+        + ([] if cfg_payloads else ["配置快照未采集（API 不可达或服务未启动）——对比可信度降级"]),
     )
     if args.dry_run:
         print(f"[eval] dry-run 通过：{sum(len(d.cases) for d in datasets)} 条用例装配合法")

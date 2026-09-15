@@ -25,6 +25,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 SCENARIOS = ("常规", "边界", "异常")
+TIERS = ("core", "full")
 
 
 class SchemaError(ValueError):
@@ -49,6 +50,7 @@ class CaseSpec:
     intent: str | None = None
     origin: str | None = None
     trials: int | None = None
+    tier: str = "core"                  # core=日常全量跑；full=里程碑全量才跑（同攻击面第二变体/常规覆盖冗余）
     cost_gate: dict | None = None
     version: str | None = None
     # 红队支持：攻击前置状态与用例级审批决定
@@ -126,6 +128,9 @@ def load_dataset(path: str | Path, scorer_types: set[str] | None = None) -> Data
         auto_approve = c.get("auto_approve")
         if auto_approve not in (None, "approve", "reject"):
             raise SchemaError(f"{cid}: auto_approve 只能为 approve/reject")
+        tier = c.get("tier", "core")
+        if tier not in TIERS:
+            raise SchemaError(f"{cid}: tier 非法 {tier!r}，取值 {TIERS}")
         case_pre = c.get("pre_state") or {}
         if not isinstance(case_pre, dict):
             raise SchemaError(f"{cid}: pre_state 必须为对象")
@@ -133,7 +138,8 @@ def load_dataset(path: str | Path, scorer_types: set[str] | None = None) -> Data
         cases.append(CaseSpec(
             id=cid, dataset=name, input=c["input"], scorers=scorers,
             crew=c.get("crew"), scenario=scenario, intent=c.get("intent"),
-            origin=c.get("origin"), trials=c.get("trials"), cost_gate=c.get("cost_gate"),
+            origin=c.get("origin"), trials=c.get("trials"), tier=tier,
+            cost_gate=c.get("cost_gate"),
             version=c.get("version") or version,
             pre_state=merged_pre, auto_approve=auto_approve,
         ))
@@ -144,3 +150,10 @@ def load_dataset(path: str | Path, scorer_types: set[str] | None = None) -> Data
 
 def load_datasets(paths: list[str | Path], **kw) -> list[Dataset]:
     return [load_dataset(p, **kw) for p in paths]
+
+
+def filter_by_tier(cases: list[CaseSpec], tier: str) -> list[CaseSpec]:
+    """按 tier 过滤用例：tier="full" 返回全部；其余值只返回 core（缺省日常跑法）。"""
+    if tier == "full":
+        return list(cases)
+    return [c for c in cases if c.tier == "core"]

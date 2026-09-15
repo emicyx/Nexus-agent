@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from testing.eval.schema import SchemaError, load_dataset
+from testing.eval.schema import SchemaError, filter_by_tier, load_dataset
 
 _DATASETS = Path(__file__).resolve().parents[1] / "eval" / "datasets"
 
@@ -133,3 +133,52 @@ def test_real_datasets_pre_state_wiring():
     q15 = next(c for c in rag.cases if c.id == "q15")
     assert any(s.type == "llm_rubric" for s in q15.scorers)
     assert next(s for s in q15.scorers if s.type == "regex_not_match").weight == 0
+
+
+def test_tier_default_and_validation(tmp_path):
+    """tier 缺省=core；非法值在加载期报错。"""
+    p = _write(tmp_path, {"name": "x", "cases": [
+        _case("c1"),
+        _case("c2", tier="full"),
+    ]})
+    ds = load_dataset(p)
+    assert ds.cases[0].tier == "core"
+    assert ds.cases[1].tier == "full"
+
+    p = _write(tmp_path, {"name": "x", "cases": [_case("c1", tier="mid")]})
+    with pytest.raises(SchemaError, match="tier"):
+        load_dataset(p)
+
+
+def test_filter_by_tier(tmp_path):
+    """--tier core（日常缺省）只留 core；--tier full（里程碑）全量。"""
+    p = _write(tmp_path, {"name": "x", "cases": [
+        _case("c1"), _case("c2", tier="full"), _case("c3"), _case("c4", tier="full"),
+    ]})
+    ds = load_dataset(p)
+    assert [c.id for c in filter_by_tier(ds.cases, "core")] == ["c1", "c3"]
+    assert [c.id for c in filter_by_tier(ds.cases, "full")] == ["c1", "c2", "c3", "c4"]
+
+
+def test_real_datasets_tier_layout_and_cost_reduction():
+    """2026-09-15 成本分层落地核验：核心锚全在 core；变体/冗余降 full；大户 trials 降级。"""
+    inc = load_dataset(_DATASETS / "capability_incidents.json")
+    # 缺陷锚一条不砍：13 条全 core
+    assert all(c.tier == "core" for c in inc.cases) and len(inc.cases) == 13
+    assert inc.default_trials == 2
+    # 写路径大户（单条 5 万+ token）单 trial
+    heavy = {c.id: c.effective_trials(inc.default_trials)
+             for c in inc.cases if c.id in {"inc-a3", "inc-b3", "inc-b4"}}
+    assert heavy == {"inc-a3": 1, "inc-b3": 1, "inc-b4": 1}
+
+    rt = load_dataset(_DATASETS / "redteam.json")
+    full_ids = {c.id for c in rt.cases if c.tier == "full"}
+    # 同攻击面第二变体降 full，六大攻击面的第一变体保持 core
+    assert full_ids == {"rt-2-rag-inject-direct", "rt-6-ssrf-private"}
+    assert rt.default_trials == 1
+
+    rag = load_dataset(_DATASETS / "rag_v3.json")
+    rag_full = {c.id for c in rag.cases if c.tier == "full"}
+    # 常规检索题降 full；断言校准锚（q08/q15）与 rubric 权威样本（q10/q13）必须 core
+    assert rag_full == {"q05", "q06", "q09", "q11", "q14"}
+    assert rag.default_trials == 2
