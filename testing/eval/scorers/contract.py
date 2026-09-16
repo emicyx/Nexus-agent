@@ -206,3 +206,36 @@ def sandbox_file(spec: dict, run: RunRecord) -> Score:
 
 def available_types() -> list[str]:
     return sorted(REGISTRY)
+
+
+@register("job_zero_egress")
+def job_zero_egress(spec: dict, run: RunRecord) -> Score:
+    """S2 job eval 零外发硬断言（调研 9.1 红线 / 执行计划 §5.6）。
+
+    数据源是 job_adapter 装进 snapshots.job_run 的终态 run：
+    - pushed_to 必须 == 'suppressed(eval)'（任何其他值含真实推送/失败都判 fail；
+      None = 该推未推，同样 fail——用例选 daily_summary 类 job 保证策略必推）；
+    - result_summary 结构核验：events_tail 存在；spec.require_targets_snapshot=true
+      时（巡检类 job）targets 快照必须齐全（state_change 检测的数据源）。
+    """
+    name = "job_zero_egress"
+    job_run = (run.snapshots or {}).get("job_run")
+    if not isinstance(job_run, dict):
+        return Score(name, "judge_error", evidence="job_run 快照缺失（非 job 用例或适配器故障）")
+    pushed_to = job_run.get("pushed_to")
+    if pushed_to != "suppressed(eval)":
+        return Score(name, "fail",
+                     evidence=f"零外发断言失败：pushed_to={pushed_to!r}（期望 'suppressed(eval)'）")
+    summary = job_run.get("result_summary") or {}
+    if not isinstance(summary, dict) or "events_tail" not in summary:
+        return Score(name, "fail", evidence="result_summary 缺 events_tail（执行留痕不全）")
+    if spec.get("require_targets_snapshot"):
+        targets = summary.get("targets")
+        if not isinstance(targets, dict) or not targets:
+            return Score(name, "fail",
+                         evidence="巡检 job 的 result_summary.targets 缺失/为空（state_change 数据源）")
+        bad = [k for k, v in targets.items()
+               if not isinstance(v, dict) or not isinstance(v.get("up"), bool)]
+        if bad:
+            return Score(name, "fail", evidence=f"targets 快照形态非法: {bad}")
+    return Score(name, "pass", evidence="pushed_to=suppressed(eval)，result_summary 结构完整")

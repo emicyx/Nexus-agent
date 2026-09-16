@@ -43,6 +43,9 @@ TOOL_REGISTRY: dict[str, tuple[str, str]] = {
     # 网页内容入库工具
     "fetch_url": ("app.tools.fetch_url_tool", "FetchUrlTool"),
     "kb_ingest": ("app.tools.kb_ingest_tool", "KbIngestTool"),
+    # v2 S2 巡检与推送（目标锁定 env，见各工具模块安全说明）
+    "http_check": ("app.tools.http_check_tool", "HttpCheckTool"),
+    "push_message": ("app.tools.push_message_tool", "PushMessageTool"),
 }
 
 # 可选项：供前端下拉选择（只用 key 列表，不触发 import）

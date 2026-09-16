@@ -415,3 +415,62 @@ export const getChannelsStatus = () =>
 
 /** 会话来源判别：session_uuid 以 "qq:" 前缀开头 = QQ 渠道会话（§4.5）。 */
 export const isQQSession = (sessionUuid: string) => sessionUuid.startsWith("qq:");
+
+// ---- Jobs（S2：定时任务与推送，config 页 Jobs 页签）----
+export interface JobRead {
+  id: number;
+  name: string;
+  enabled: boolean;
+  trigger_type: "cron" | "interval";
+  trigger_config: Record<string, unknown>;
+  crew_id: number;
+  crew?: { id: number; name: string } | null;
+  input_template: string;
+  output_config: Record<string, unknown>;
+  cost_cap_tokens: number | null;
+  max_consecutive_failures: number;
+  last_run_at: string | null;
+  next_run_at: string | null;
+  consecutive_failures: number;
+}
+
+export interface JobRunRead {
+  id: number;
+  job_id: number;
+  status: "running" | "succeeded" | "failed" | "disabled_by_circuit" | "eval";
+  started_at: string;
+  finished_at: string | null;
+  error: string | null;
+  tokens_used: number;
+  cost_note: string;
+  result_summary: Record<string, unknown> | null;
+  pushed_to: string | null;
+}
+
+export interface JobTriggerResponse {
+  run_id: number;
+  status: string;
+  pushed_to: string | null;
+}
+
+export const listJobs = () => jsonRequest<JobRead[]>(`${API_BASE}/v1/jobs`);
+export const patchJob = (id: number, payload: Partial<Pick<JobRead, "enabled" | "name">> & Record<string, unknown>) =>
+  jsonRequest<JobRead>(`${API_BASE}/v1/jobs/${id}`, { method: "PATCH", body: JSON.stringify(payload) });
+export const listJobRuns = (id: number, limit = 10) =>
+  jsonRequest<JobRunRead[]>(`${API_BASE}/v1/jobs/${id}/runs?limit=${limit}`);
+export const triggerJob = (id: number, evalMode: boolean) =>
+  jsonRequest<JobTriggerResponse>(`${API_BASE}/v1/jobs/${id}/run`, {
+    method: "POST",
+    body: JSON.stringify({ eval: evalMode }),
+  });
+
+/** 触发配置 → 人类可读（cron 表达式 / 间隔分钟）。 */
+export const describeTrigger = (job: JobRead): string => {
+  if (job.trigger_type === "cron") {
+    return String(job.trigger_config?.expr ?? "?");
+  }
+  const s = Number(job.trigger_config?.seconds ?? 0);
+  if (s % 3600 === 0) return `每 ${s / 3600} 小时`;
+  if (s % 60 === 0) return `每 ${s / 60} 分钟`;
+  return `每 ${s} 秒`;
+};

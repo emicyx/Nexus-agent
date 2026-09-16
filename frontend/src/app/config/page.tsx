@@ -17,14 +17,15 @@ import {
 } from "@/lib/api-client";
 import { AgentForm } from "@/components/config/agent-form";
 import { CrewForm } from "@/components/config/crew-form";
+import { JobsPanel } from "@/components/config/jobs-panel";
 import { KnowledgeForm } from "@/components/config/knowledge-form";
 import { SchemaForm } from "@/components/config/schema-form";
 import { SkillForm } from "@/components/config/skill-form";
 import { ToolForm } from "@/components/config/tool-form";
 import { AppShell } from "@/components/app-shell";
-import { Bot, Wrench, Users, BookOpen, Zap, Plus, ChevronRight, FileCode } from "lucide-react";
+import { Bot, Wrench, Users, BookOpen, Zap, Plus, ChevronRight, FileCode, Clock } from "lucide-react";
 
-type Tab = "agents" | "tools" | "skills" | "schemas" | "crews" | "knowledge";
+type Tab = "agents" | "tools" | "skills" | "schemas" | "crews" | "knowledge" | "jobs";
 type SelState = number | null;
 
 export default function ConfigPage() {
@@ -92,6 +93,7 @@ export default function ConfigPage() {
     { key: "schemas" as Tab, label: "Schemas", icon: FileCode, count: schemas.length },
     { key: "crews" as Tab, label: "Crews", icon: Users, count: crews.length },
     { key: "knowledge" as Tab, label: "知识库", icon: BookOpen, count: documents.length },
+    { key: "jobs" as Tab, label: "Jobs", icon: Clock, count: 0 },
   ];
 
   // 左栏：Tab 导航
@@ -122,8 +124,8 @@ export default function ConfigPage() {
   return (
     <AppShell leftPanel={leftPanel}>
       <div className="flex h-full overflow-hidden">
-        {/* 列表面板（knowledge tab 无侧栏，全宽） */}
-        {tab !== "knowledge" && (
+        {/* 列表面板（knowledge/jobs tab 无侧栏，全宽） */}
+        {tab !== "knowledge" && tab !== "jobs" && (
           <aside className="w-56 flex-shrink-0 overflow-y-auto border-r border-sakura-200 bg-white/60">
             <div className="flex items-center justify-between border-b border-sakura-100 px-3 py-2">
               <span className="text-xs font-medium text-sakura-400">列表</span>
@@ -283,6 +285,7 @@ export default function ConfigPage() {
           {tab === "knowledge" && (
             <KnowledgeForm documents={documents} onReload={reload} />
           )}
+          {tab === "jobs" && <JobsPanel />}
         </main>
       </div>
     </AppShell>

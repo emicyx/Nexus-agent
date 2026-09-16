@@ -1191,9 +1191,106 @@ async def run_crew_chat(
     return final_text
 
 
+# ---------- v2 S2：job 执行入口（一次性，无会话上下文） ----------
+
+
+class JobOutcome:
+    """run_crew_job 的结果（job_runner 据此落 job_runs）。
+
+    events_tail 是事件流截断存储（最后 _JOB_EVENTS_TAIL 条，每条内容截断），
+    供 result_summary 排障；error 非空即视为本次运行失败。
+    """
+
+    _TAIL_LIMIT = 30
+    _EXCERPT_CHARS = 200
+
+    def __init__(self) -> None:
+        self.answer: str = ""
+        self.error: str = ""
+        self.events_tail: list[dict] = []
+
+    def push_event(self, ev: AgentEvent) -> None:
+        """事件截断入尾（tool_call/tool_result/error 等关键事件留痕）。"""
+        summary = ev.content or ev.input or ev.output or ""
+        self.events_tail.append({
+            "type": ev.type,
+            "agent": ev.agent,
+            "tool": ev.tool,
+            "excerpt": str(summary)[: self._EXCERPT_CHARS],
+        })
+        if len(self.events_tail) > self._TAIL_LIMIT:
+            del self.events_tail[: len(self.events_tail) - self._TAIL_LIMIT]
+
+
+async def run_crew_job(
+    crew_id: int,
+    message: str,
+    *,
+    token_session: str | None = None,
+) -> JobOutcome:
+    """job 一次性执行入口（§5.3）：复用 run_crew_chat 装配链（session_id=None，
+    即无 STM/LTM 会话上下文；job 不产生会话历史）。
+
+    - 事件收进本地队列，关键事件截断存 events_tail（落 job_runs.result_summary）；
+    - run_control 登记（优雅停机可触及 job 运行）；
+    - token_session 把本次运行的 LLM 用量归集到独立会话键（job 级成本差值法）。
+    """
+    import contextlib
+
+    from app.core import run_control
+    from app.core.llm_errors import classify_llm_error
+    from app.core.run_control import (
+        bind_run_cancel_event,
+        current_cancel_event,
+        new_run_id,
+        register_run,
+        unregister_run,
+    )
+    from app.core.token_budget import bind_token_session, unbind_token_session
+
+    queue: asyncio.Queue[AgentEvent | None] = asyncio.Queue(maxsize=settings.SSE_QUEUE_MAXSIZE)
+    loop = asyncio.get_running_loop()
+    outcome = JobOutcome()
+
+    async def producer() -> None:
+        token = bind_token_session(token_session)
+        try:
+            await run_crew_chat(crew_id, message, queue, loop, session_id=None)
+        except Exception as e:
+            logger.exception("job: crew_execution_failed crew_id=%s", crew_id)
+            _, user_message = classify_llm_error(e)
+            outcome.error = user_message
+            try_put(queue, AgentEvent(type="error", content=user_message))
+        finally:
+            unbind_token_session(token)
+            try_put(queue, None)
+
+    run_id = f"job-{new_run_id()}"
+    bind_run_cancel_event()
+    task = asyncio.create_task(producer())
+    register_run(run_id, session=run_id, event=current_cancel_event(), task=task, queue=queue)
+    try:
+        while True:
+            ev = await queue.get()
+            if ev is None:
+                break
+            if ev.type == "final_answer" and ev.content:
+                outcome.answer = ev.content
+            elif ev.type == "error" and ev.content:
+                if not outcome.error:
+                    outcome.error = ev.content
+            if ev.type in ("tool_call", "tool_result", "error", "final_answer"):
+                outcome.push_event(ev)
+    finally:
+        if not task.done():
+            task.cancel()
+            with contextlib.suppress(BaseException):
+                await task
+        unregister_run(run_id)
+    return outcome
+
+
 # ---------- 回退：单 Agent（无 DB 依赖）----------
-
-
 async def run_single_agent_chat(
     user_input: str,
     queue: "asyncio.Queue[AgentEvent | None]",

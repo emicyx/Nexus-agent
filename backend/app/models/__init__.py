@@ -6,6 +6,7 @@ from app.models.chat import ChatMessage, ChatSession
 from app.models.chat_session_summary import ChatSessionSummary
 from app.models.crew import CrewConfig
 from app.models.document import DocumentChunk, DocumentConfig
+from app.models.job import Job, JobRun
 from app.models.skill import SkillConfig
 from app.models.output_schema import OutputSchemaConfig
 from app.models.task import TaskConfig
@@ -30,4 +31,6 @@ __all__ = [
     "ChatSessionSummary",
     "UserMemory",
     "OutputSchemaConfig",
+    "Job",
+    "JobRun",
 ]

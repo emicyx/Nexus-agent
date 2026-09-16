@@ -150,5 +150,20 @@ class Settings(BaseSettings):
     # 同一会话排队上限（§4.4：处理中再来消息 FIFO 排队，超限回"正在处理中"）
     QQ_SESSION_QUEUE_MAX: int = 5
 
+    # ── S2 定时任务与推送（巡检告警 + KB 日报）──────────────────────
+    # 主动推送目标（安全不变量 1：egress 目标只来自 env，模型不可填）。
+    # JSON：{"type":"private","user_id":123} 或 {"type":"group","group_id":456}
+    QQ_ALERT_TARGET: str = ""
+    # 巡检目标清单（安全不变量 3：http_check 只查这里的目标，无自由 URL 参数）。
+    # JSON 数组：[{"name":"api","url":"https://...","expect_status":200,"timeout_s":10}]
+    # 私网目标由运维在此显式声明（http_check 直连不走 fetch_url/net_guard 路径）
+    MONITOR_TARGETS: str = "[]"
+    # cron 时区（安全不变量 9：cron 一律显式时区）
+    JOB_TIMEZONE: str = "Asia/Shanghai"
+    # eval 全局开关（§5.6 零外发第二道闸）：1 = 一切 job 推送强制抑制
+    NEXUS_EVAL_MODE: bool = False
+    # 调度总开关（§3.3 回滚：false = 不注册任何定时任务，通道与 job 自然失效）
+    JOBS_ENABLED: bool = True
+
 
 settings = Settings()

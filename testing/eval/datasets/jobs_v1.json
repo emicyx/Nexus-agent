@@ -1,0 +1,28 @@
+{
+  "name": "jobs",
+  "version": "2026.09.15",
+  "description": "S2 定时任务评测：eval 零外发硬断言（调研 9.1 红线 / 执行计划 5.6 落地）",
+  "default_trials": 1,
+  "meta": {
+    "adapter": "testing/eval/job_adapter.py（input.job 指定触发哪个 job 的 eval 演练）"
+  },
+  "cases": [
+    {
+      "id": "job-patrol-01",
+      "input": {
+        "message": "触发 ops_daily_report 的 eval 演练：全量目标一行状态日报的生成与零外发断言",
+        "job": "ops_daily_report"
+      },
+      "scenario": "常规",
+      "intent": "job eval 零外发硬断言 + 巡检 result_summary 结构核验",
+      "origin": "S2 §5.6 必须落地项；daily_summary 策略保证该推（断言才有判定面）",
+      "tier": "core",
+      "scorers": [
+        {
+          "type": "job_zero_egress",
+          "spec": { "require_targets_snapshot": true }
+        }
+      ]
+    }
+  ]
+}

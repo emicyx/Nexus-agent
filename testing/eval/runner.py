@@ -397,8 +397,14 @@ def main() -> int:
             for i in range(case.effective_trials(n_trials)):
                 if clean_sb:
                     env.clean_sandbox()  # trial 间隔离：上一 trial 的产物不泄入下一 trial 快照
-                record = run_trial(env, case.input, case.crew, args.timeout, needs_db, needs_sb,
-                                   approval_decision=case.auto_approve or args.auto_approve)
+                if case.input.get("job"):
+                    # S2 job 用例（§5.6）：走 job 适配器（触发 eval 演练 → 终态快照）
+                    from testing.eval.job_adapter import run_job_trial
+
+                    record = run_job_trial(env, case.input, args.timeout)
+                else:
+                    record = run_trial(env, case.input, case.crew, args.timeout, needs_db, needs_sb,
+                                       approval_decision=case.auto_approve or args.auto_approve)
                 # 原始事件落盘：失败校准的证据链（没有它，断言措辞问题无法诊断）
                 (run_dir / "raw" / f"{case.id}_t{i}.json").write_text(
                     json.dumps(record.events, ensure_ascii=False, indent=1), encoding="utf-8")

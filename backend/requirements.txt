@@ -29,6 +29,10 @@ python-dotenv~=1.1.1
 fastapi~=0.115.0
 uvicorn[standard]~=0.32.0
 
+# 定时任务调度（v2 S2：AsyncIOScheduler，memory jobstore）
+# 锁 3.x——4.x 是 API 不兼容的重写版
+apscheduler~=3.11
+
 # Redis（Week 5+ 使用）
 redis~=5.2.0
 

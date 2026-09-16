@@ -12,7 +12,15 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import AsyncSessionLocal
-from app.models import AgentConfig, CrewConfig, OutputSchemaConfig, SkillConfig, TaskConfig, ToolConfig
+from app.models import (
+    AgentConfig,
+    CrewConfig,
+    Job,
+    OutputSchemaConfig,
+    SkillConfig,
+    TaskConfig,
+    ToolConfig,
+)
 from app.models.association import CrewAgent
 
 logger = logging.getLogger("seed")
@@ -274,6 +282,40 @@ async def _get_or_create_task(
     await session.flush()
     logger.info(f"seed: created task {name}")
     return task
+
+
+async def _get_or_create_job(
+    session: AsyncSession,
+    name: str,
+    trigger_type: str,
+    trigger_config: dict,
+    crew: CrewConfig,
+    input_template: str,
+    output_config: dict,
+) -> Job:
+    """默认 job 幂等创建：按 name 缺失才建，**绝不覆盖已有行**。
+
+    job 是用户可编辑的运行时配置（启停/改 cron/改模板），seed 只负责
+    首次铺默认值——与 crew/task 的"同步文案"策略刻意不同。
+    """
+    stmt = select(Job).where(Job.name == name)
+    existing = (await session.execute(stmt)).scalar_one_or_none()
+    if existing:
+        return existing
+    job = Job(
+        name=name,
+        enabled=True,
+        trigger_type=trigger_type,
+        trigger_config=trigger_config,
+        crew_id=crew.id,
+        input_template=input_template,
+        output_config=output_config,
+        max_consecutive_failures=5,
+    )
+    session.add(job)
+    await session.flush()
+    logger.info(f"seed: created job {name} ({trigger_type} -> crew {crew.name})")
+    return job
 
 
 async def _get_or_create_schema(
@@ -1055,9 +1097,150 @@ async def ensure_seed() -> None:
             context_task_ids=[loop_review_task.id],
         )
 
+        # ── v2 S2：巡检告警 + KB 日报（ops_patrol / daily_digest + 默认 job）──
+        # 工具（目标锁定 env，见工具模块安全说明）
+        http_check_tool_cfg = await _get_or_create_tool(
+            session,
+            name="http_check",
+            tool_key="http_check",
+            description="HTTP 巡检探测工具（目标清单来自系统配置，仅按名称过滤）",
+        )
+        push_message_tool_cfg = await _get_or_create_tool(
+            session,
+            name="push_message",
+            tool_key="push_message",
+            description="消息推送工具（目标由系统配置锁定，参数只有消息内容）",
+        )
+
+        ops_patrol_agent = await _get_or_create_agent(
+            session,
+            name="ops_patrol_agent",
+            role="运维巡检员",
+            goal="基于系统确定性探测结果判断目标健康状态，变化时给出初诊并按策略推送告警",
+            backstory=(
+                "你是一名克制、严谨的运维巡检员。\n"
+                "数据纪律：目标状态只以任务输入里的【本次巡检结果】（系统确定性探测）"
+                "和你调用 http_check 复查的结果为准，严禁凭空编造或臆测任何目标的状态、"
+                "状态码或延迟；输入里没有的信息就明说不知道。\n"
+                "初诊纪律：告警必须带初诊——哪个目标、从何时起（结合上次状态）、"
+                "当时延迟/状态码、可能原因（网络/服务崩溃/证书/依赖等方向性判断，"
+                "不确定就列出候选并说明如何进一步确认）。\n"
+                "推送纪律：严格按任务输入末尾的[推送指令]执行——指令说无需推送就绝不调用"
+                " push_message；指令要求推送时消息保持稀疏克制（一条说清），纯文本无 markdown 语法。"
+            ),
+            tools=[http_check_tool_cfg, push_message_tool_cfg],
+            max_iter=6,
+            memory=False,
+        )
+        digest_writer = await _get_or_create_agent(
+            session,
+            name="digest_writer",
+            role="知识库日报编辑",
+            goal="把当日知识库增量整理成一条适合 IM 阅读的日报并推送",
+            backstory=(
+                "你是一名知识库日报编辑，为每天回顾知识库变化的个人用户服务。\n"
+                "产出纪律：日报三段式——①今日新增了什么（按来源分组数一下）；"
+                "②每条两三句摘要（依据增量清单的头部预览，需要更多细节用 rag_search 检索文档名，"
+                "严禁编造清单之外的内容）；③值得关注的一条（说明为什么值得）。\n"
+                "无新增的日子就推送一句简短的'今日无新增'，不硬凑内容。\n"
+                "推送纪律：按任务输入末尾的[推送指令]执行；日报是纯文本，"
+                "结构清晰无 markdown 语法，整体控制在一屏内。"
+            ),
+            tools=[push_message_tool_cfg, rag_tool],
+            max_iter=6,
+            memory=False,
+        )
+        ops_patrol_crew = await _get_or_create_crew(
+            session,
+            name="ops_patrol",
+            description="单 Agent 巡检：解读确定性探测结果，状态变化时初诊告警（S2）",
+            agents=[ops_patrol_agent],
+        )
+        daily_digest_crew = await _get_or_create_crew(
+            session,
+            name="daily_digest",
+            description="单 Agent 知识库日报：增量清单 → 一条 IM 日报（S2）",
+            agents=[digest_writer],
+        )
+        await _get_or_create_task(
+            session,
+            crew=ops_patrol_crew,
+            agent=ops_patrol_agent,
+            name="patrol_report",
+            description=(
+                "巡检任务输入：\n{user_input}\n\n"
+                "职责：\n"
+                "1. 解读【本次巡检结果】（系统确定性探测），不编造目标状态\n"
+                "2. 有【状态变化】时逐目标初诊：哪个目标、从何时起、当时延迟/状态码、"
+                "可能原因；对可疑目标可用 http_check 按名称复查确认\n"
+                "3. 严格按输入末尾的[推送指令]决定是否调用 push_message\n"
+                "4. 推送消息为纯文本一条说清：变化目标、初诊结论、建议动作\n"
+                "5. 无变化时不推送，输出一行简短巡检摘要"
+            ),
+            expected_output="按[推送指令]产出的告警消息（纯文本）或一行巡检摘要",
+            position=0,
+        )
+        await _get_or_create_task(
+            session,
+            crew=daily_digest_crew,
+            agent=digest_writer,
+            name="digest_report",
+            description=(
+                "日报任务输入：\n{user_input}\n\n"
+                "职责：\n"
+                "1. 基于【新增文档】增量清单产出知识库日报（新增了什么/每条两三句/"
+                "值得关注的一条）\n"
+                "2. 需要更多细节用 rag_search 检索，严禁编造清单之外的内容\n"
+                "3. 严格按输入末尾的[推送指令]推送（纯文本，无 markdown 语法）\n"
+                "4. 无新增时推送简短'今日无新增'日报"
+            ),
+            expected_output="适合 IM 推送的知识库日报（纯文本）",
+            position=0,
+        )
+
+        # 默认 job（幂等：按 name 缺失才建，绝不覆盖用户改动——启停/改 cron 都保留）
+        await _get_or_create_job(
+            session,
+            name="ops_patrol",
+            trigger_type="interval",
+            trigger_config={"seconds": 1800},
+            crew=ops_patrol_crew,
+            input_template=(
+                "日期时间：{{date}}\n\n"
+                "执行例行巡检。{{targets_report}}"
+            ),
+            output_config={"push": {"on": "state_change"}},
+        )
+        await _get_or_create_job(
+            session,
+            name="ops_daily_report",
+            trigger_type="cron",
+            trigger_config={"expr": "0 8 * * *"},
+            crew=ops_patrol_crew,
+            input_template=(
+                "日期时间：{{date}}\n\n"
+                "生成今日巡检日报：每个监控目标一行状态（UP/DOWN + 状态码/延迟）。"
+                "如有 DOWN 目标，在日报末尾附简短初诊。{{targets_report}}"
+            ),
+            output_config={"push": {"on": "daily_summary"}},
+        )
+        await _get_or_create_job(
+            session,
+            name="kb_daily_digest",
+            trigger_type="cron",
+            trigger_config={"expr": "0 21 * * *"},
+            crew=daily_digest_crew,
+            input_template=(
+                "日期时间：{{date}}\n\n"
+                "生成知识库日报。{{kb_delta}}"
+            ),
+            output_config={"push": {"on": "always"}},
+        )
+
         await session.commit()
     logger.info(
         "seed: default crews ensured "
-        "(researcher_writer + knowledge_qa + web_ingest_crew + iterative_write_crew; "
+        "(researcher_writer + knowledge_qa + web_ingest_crew + iterative_write_crew "
+        "+ ops_patrol + daily_digest; "
         f"retired: {', '.join(RETIRED_CREWS)})"
     )
