@@ -89,16 +89,17 @@ def render_metrics() -> str:
     for session, total in get_session_totals().items():
         counter("token_usage_session_total", "每会话 LLM token 消耗", total, {"session": session})
 
-    # S1 QQ 渠道在线状态（onebot_adapter 维护，lazy import 防循环依赖）
+    # 渠道在线状态（S4 阶段 A 起遍历渠道注册表，lazy import 防循环依赖）
     try:
-        from app.channels import onebot_adapter
+        from app.channels import registry
 
-        onebot = onebot_adapter.get_status()
-        gauge("onebot_connected", "OneBot（QQ）反向 WS 连接状态（1=在线）",
-              1 if onebot["connected"] else 0)
-        gauge("onebot_connected_since_seconds",
-              "OneBot 连接建立时的 epoch 时间戳（0=离线）",
-              onebot["connected_since"] or 0)
+        for name, status in registry.channel_statuses().items():
+            label = status.get("label", name)
+            gauge(f"{name}_connected", f"{label} 渠道连接状态（1=在线）",
+                  1 if status.get("connected") else 0)
+            gauge(f"{name}_connected_since_seconds",
+                  f"{label} 连接建立时的 epoch 时间戳（0=离线）",
+                  status.get("connected_since") or 0)
     except Exception:
         pass  # channels 模块异常不应拖垮整个 /metrics
 

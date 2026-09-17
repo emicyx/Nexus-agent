@@ -15,7 +15,7 @@ import {
   isQQSession,
   type CrewRead,
   type ChatSessionRead,
-  type OneBotChannelStatus,
+  type ChannelStatus,
 } from "@/lib/api-client";
 import { Send, Square, Plus, Users, GitBranch, MessageCircle, Trash2, History, Loader2, ArrowDown, Sparkles, Terminal, Radio } from "lucide-react";
 
@@ -78,13 +78,14 @@ export default function ChatPage() {
       });
   }, []);
 
-  // S1 渠道在线状态（QQ chip）：挂载时查 + 60s 轮询；未配置渠道不渲染
-  const [onebot, setOnebot] = useState<OneBotChannelStatus | null>(null);
+  // S1 渠道在线状态 chip：挂载时查 + 60s 轮询；S4 阶段 A 起遍历渠道注册表，
+  // 未配置渠道不渲染（新增渠道由后端注册表自动出现在这里，前端零改动）
+  const [channels, setChannels] = useState<Record<string, ChannelStatus> | null>(null);
   useEffect(() => {
     let alive = true;
     const poll = () =>
       getChannelsStatus()
-        .then((s) => alive && setOnebot(s.onebot))
+        .then((s) => alive && setChannels(s))
         .catch(() => {/* 后端不可达时保持上次状态 */});
     poll();
     const timer = setInterval(poll, 60_000);
@@ -219,34 +220,37 @@ export default function ChatPage() {
   // 左栏内容
   const leftPanel = (
     <div className="flex h-full flex-col p-3">
-      {/* S1 渠道在线状态 chip：仅配置了 QQ 渠道时渲染 */}
-      {onebot?.configured && (
+      {/* S1 渠道在线状态 chip：遍历渠道注册表，仅配置了的渠道渲染 */}
+      {Object.entries(channels ?? {})
+        .filter(([, s]) => s.configured)
+        .map(([name, s]) => (
         <div
+          key={name}
           className={`mb-3 flex items-center justify-between rounded-lg border px-2.5 py-1.5 text-[11px] ${
-            onebot.connected
+            s.connected
               ? "border-emerald-200 bg-emerald-50/60 text-emerald-700"
               : "border-amber-200 bg-amber-50/60 text-amber-700"
           }`}
           title={
-            onebot.connected && onebot.connected_since
-              ? `已连接：${new Date(onebot.connected_since * 1000).toLocaleString("zh-CN")}`
-              : "NapCat 未连接（断线会自动重连）"
+            s.connected && s.connected_since
+              ? `已连接：${new Date(s.connected_since * 1000).toLocaleString("zh-CN")}`
+              : "渠道未连接（断线会自动重连）"
           }
         >
           <span className="flex items-center gap-1.5">
             <Radio size={12} />
-            QQ 渠道
+            {s.label ?? name} 渠道
           </span>
-          <span className={`flex items-center gap-1 ${onebot.connected ? "" : "opacity-80"}`}>
+          <span className={`flex items-center gap-1 ${s.connected ? "" : "opacity-80"}`}>
             <span
               className={`h-1.5 w-1.5 rounded-full ${
-                onebot.connected ? "animate-pulse bg-emerald-500" : "bg-amber-500"
+                s.connected ? "animate-pulse bg-emerald-500" : "bg-amber-500"
               }`}
             />
-            {onebot.connected ? "在线" : "离线"}
+            {s.connected ? "在线" : "离线"}
           </span>
         </div>
-      )}
+      ))}
       {/* 模式区：Auto 助手模式（默认）/ 开发者模式的 Crew 选择 */}
       {autoMode ? (
         <div className="mb-3 rounded-lg border border-sakura-200 bg-sakura-50/50 p-3">

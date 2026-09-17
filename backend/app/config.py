@@ -147,8 +147,9 @@ class Settings(BaseSettings):
     QQ_BOT_SELF_ID: str = ""
     # QQ 单条消息长度上限（超长分段发送；OneBot 纯文本段，NapCat 建议单条 <1500 字）
     QQ_MESSAGE_MAX_LEN: int = 1500
-    # 同一会话排队上限（§4.4：处理中再来消息 FIFO 排队，超限回"正在处理中"）
-    QQ_SESSION_QUEUE_MAX: int = 5
+    # IM 入站管线同一发送者排队上限（§4.4：处理中再来消息 FIFO 排队，超限回"正在处理中"；
+    # S4 阶段 A 起属渠道无关管线配置，原 QQ_SESSION_QUEUE_MAX 更名）
+    IM_SESSION_QUEUE_MAX: int = 5
 
     # ── S2 定时任务与推送（巡检告警 + KB 日报）──────────────────────
     # 主动推送目标（安全不变量 1：egress 目标只来自 env，模型不可填）。

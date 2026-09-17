@@ -26,7 +26,8 @@ import urllib.parse
 
 import requests
 
-from app.channels.onebot_adapter import SendResult, split_long_message
+from app.channels.im_pipeline import split_long_message
+from app.channels.onebot_adapter import SendResult
 from app.config import settings
 
 logger = logging.getLogger("services.dingtalk_push")

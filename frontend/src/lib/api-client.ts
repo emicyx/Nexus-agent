@@ -399,16 +399,17 @@ export const deleteChatSession = (id: number) =>
   jsonRequest<void>(`${API_BASE}/v1/chat/sessions/${id}`, { method: "DELETE" });
 
 
-// ---- Channel（S1：渠道在线状态，/chat 顶栏 chip 轮询）----
-export interface OneBotChannelStatus {
+// ---- Channel（S1：渠道在线状态，/chat 顶栏 chip 轮询；S4 阶段 A 起遍历注册表）----
+export interface ChannelStatus {
   connected: boolean;
   connected_since: number | null;
   configured: boolean;
+  /** 展示名（如 "QQ"）；缺省回落渠道键名 */
+  label?: string;
 }
 
-export interface ChannelsStatus {
-  onebot: OneBotChannelStatus;
-}
+/** 键 = 渠道名（如 "onebot"），值 = 该渠道在线状态 */
+export type ChannelsStatus = Record<string, ChannelStatus>;
 
 export const getChannelsStatus = () =>
   jsonRequest<ChannelsStatus>(`${API_BASE}/v1/channels`);

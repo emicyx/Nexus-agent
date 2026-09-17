@@ -13,6 +13,7 @@ import time
 import pytest
 from fastapi.testclient import TestClient
 
+from app.channels import im_pipeline as ip
 from app.channels import onebot_adapter as ob
 from app.config import settings
 from app.llm.aliyun_llm import AliyunLLM
@@ -134,10 +135,10 @@ def test_onebot_long_reply_segmented_online(client: TestClient, monkeypatch):
     monkeypatch.setattr(settings, "ONEBOT_WS_TOKEN", "it-token", raising=False)
     monkeypatch.setattr(settings, "QQ_OWNER_IDS", "10001", raising=False)
 
-    async def fake_collect(crew_id, message, session_key):
+    async def fake_collect(channel, crew_id, message, session_key):
         return "长" * 3200
 
-    monkeypatch.setattr(ob, "_run_crew_and_collect", fake_collect)
+    monkeypatch.setattr(ip, "_run_crew_and_collect", fake_collect)
 
     with client.websocket_connect("/v1/channels/onebot/ws?token=it-token") as ws:
         fake = FakeNapCat(ws)

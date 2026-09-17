@@ -411,6 +411,7 @@ job_runs:
 > **开工门（S3 搁置教训）**：动手前先回答"我会真的每天在飞书里跟它说话吗"——没有肯定答案就不开（防玩具纪律，S3' 当日搁置实录在账本）。
 
 - **阶段 A（先做，纯重构零新渠道、无需凭据）**：onebot_adapter 内嵌入站管线抽为渠道无关 `backend/app/channels/im_pipeline.py`，行为不变，全量回归（单测/集成/评测 core 层）全绿才算完成。设计要点（原 S3 细化稿 §6.1 移入，2026-09-17）：
+  > **状态（2026-09-17）**：代码完成并部署，**停在验收门待用户确认**——单测 396（含抽象守卫自动化）/集成 62/评测 core TSR 100%（新栈）；锁键按本节指定为 `{channel}:{sender_id}`（同一发送者默认与 /cmd 链路由可并发改为串行、群聊锁由按群改为按发送者，均为更安全方向，账本当日条目有记）；QQ_SESSION_QUEUE_MAX 已更名 IM_SESSION_QUEUE_MAX。验收门通过后才进阶段 B。
   - 归一化结构 `InboundMessage{channel, sender_id, text, is_group, owners, reply: Callable[[str], Awaitable[None]]}`——adapter 把原生事件解析成它，之后进入管线；回复闭包把渠道发送细节封闭在 adapter 内；
   - 管线主入口 `handle_inbound(msg)`：白名单 → `wrap_untrusted`（单份共享，不变量 5）→ 路由 v0（同一纯函数）→ HITL 定案 A（`IM_ALLOWED_COMMANDS={"/kb"}` 共享常量）→ 并发上限检查 → 会话串行排队（lock key `{channel}:{sender_id}`，跨渠道天然不互锁）→ `run_crew_chat`（run_id 前缀 `{channel}-`）→ 回复；
   - 平移内容（from onebot_adapter，行为不变）：`wrap_untrusted` / `_ensure_session` / `_run_crew_and_collect`（含 run_control 登记）/ 会话锁与排队 / MAX_CONCURRENT_RUNS 检查与"正在处理"提示 / Web 引导文案 / `[已转交 X]` 前缀 / CREW_DISPLAY_NAMES / `split_long_message`；
