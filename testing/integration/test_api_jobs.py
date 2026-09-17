@@ -1,10 +1,12 @@
 """S2 定时任务与推送集成测试（真实 app + Mock LLM + 真实 DB/Redis）。
 
-覆盖（§5.8）：
+覆盖（§5.8 + S3' §6.4）：
 - jobs CRUD：创建/校验（422 非法 cron）/重名 409/PATCH 启停/seed 默认 job 在列
 - 手动 run（eval:true）：job_runs 记 status=eval + pushed_to=suppressed(eval)，
-  且 onebot send 调用数为 0（零外发硬断言，安全不变量 2）
+  且 onebot send / dingtalk send 调用数均为 0（零外发硬断言，安全不变量 2 延伸）
 - 手动 run（非 eval，渠道在线）：mock 出口收到推送（runner 兜底路径）
+- S3' 备推：QQ 渠道离线 + 钉钉已配置 → pushed_to 如实 failed(channel_offline)
+  且 pushed_to_backup=dingtalk（兜底送达不静默）
 - 熔断：max_consecutive_failures=1 的 job 失败一次即自动停用，
   run 状态 disabled_by_circuit，job.enabled=False
 - kb_delta：真实 DB 增量查询 + 渲染
@@ -26,6 +28,21 @@ def no_send(monkeypatch):
         return ob.SendResult(ok=True, segments=1)
 
     monkeypatch.setattr(ob, "send_qq_message", fake_send)
+    return calls
+
+
+@pytest.fixture()
+def no_dingtalk_send(monkeypatch):
+    """S3'：mock 钉钉备推出口，记录调用且不真实发送。"""
+    from app.services import dingtalk_push
+
+    calls = []
+
+    async def fake_dt(content):
+        calls.append(content)
+        return ob.SendResult(ok=True, segments=1)
+
+    monkeypatch.setattr(dingtalk_push, "send_dingtalk_message", fake_dt)
     return calls
 
 
@@ -119,9 +136,14 @@ def test_job_crud_validation(client: TestClient, cleanup_jobs: list[int]):
     assert client.post(f"/v1/jobs/{job_id}/run", json={"eval": True}).status_code == 200
 
 
-def test_job_manual_run_eval_zero_egress(client: TestClient, no_send, monkeypatch, cleanup_jobs: list[int]):
-    """零外发硬断言：eval run 落 suppressed(eval)，唯一出口调用数为 0。"""
+def test_job_manual_run_eval_zero_egress(client: TestClient, no_send, no_dingtalk_send,
+                                         monkeypatch, cleanup_jobs: list[int]):
+    """零外发硬断言：eval run 落 suppressed(eval)，两个出口（QQ/钉钉）调用数均为 0。"""
     monkeypatch.setattr(settings, "NEXUS_EVAL_MODE", False)
+    # 即使钉钉备推已配置且 mode=always，eval 也必须全抑制（S3' §6.3 硬红线）
+    monkeypatch.setattr(settings, "DINGTALK_PUSH_MODE", "always")
+    monkeypatch.setattr(settings, "DINGTALK_PUSH_WEBHOOK", "https://oapi.dingtalk.com/robot/send?access_token=t")
+    monkeypatch.setattr(settings, "DINGTALK_PUSH_SECRET", "SECit")
     job = _make_job(client, cleanup_jobs, name="it-job-eval",
                     input_template="{{date}} 巡检演练")
 
@@ -130,11 +152,14 @@ def test_job_manual_run_eval_zero_egress(client: TestClient, no_send, monkeypatc
     body = resp.json()
     assert body["status"] == "eval"
     assert body["pushed_to"] == "suppressed(eval)"
-    assert no_send == []  # 唯一出口零调用
+    assert body["pushed_to_backup"] is None
+    assert no_send == []  # QQ 出口零调用
+    assert no_dingtalk_send == []  # 钉钉备推零调用
 
     runs = client.get(f"/v1/jobs/{job['id']}/runs").json()
     assert runs and runs[0]["status"] == "eval"
     assert runs[0]["pushed_to"] == "suppressed(eval)"
+    assert runs[0]["pushed_to_backup"] is None
     assert runs[0]["result_summary"].get("events_tail") is not None
     # eval run 不计入熔断
     jobs = {j["id"]: j for j in client.get("/v1/jobs").json()}
@@ -174,6 +199,35 @@ def test_job_manual_run_offline_falls_back_honestly(client: TestClient, no_send,
     assert resp.status_code == 200
     assert resp.json()["pushed_to"] == "failed(channel_offline)"
     assert no_send == []
+
+
+def test_job_manual_run_offline_backup_dingtalk(client: TestClient, no_send, no_dingtalk_send,
+                                                monkeypatch, cleanup_jobs: list[int]):
+    """S3' 兜底：QQ 离线 + 钉钉已配置(backup) → 主通道如实 failed + 备推送达落账。"""
+    monkeypatch.setattr(settings, "NEXUS_EVAL_MODE", False)
+    monkeypatch.setattr(settings, "QQ_ALERT_TARGET", '{"type":"private","user_id":42}')
+    monkeypatch.setattr(settings, "DINGTALK_PUSH_MODE", "backup")
+    monkeypatch.setattr(settings, "DINGTALK_PUSH_WEBHOOK",
+                        "https://oapi.dingtalk.com/robot/send?access_token=t")
+    monkeypatch.setattr(settings, "DINGTALK_PUSH_SECRET", "SECit")
+    monkeypatch.setattr(ob, "get_status",
+                        lambda: {"connected": False, "connected_since": None})
+    from app.services import egress as egress_mod
+
+    monkeypatch.setattr(egress_mod, "_OFFLINE_RETRY_WAIT_S", 0)
+    job = _make_job(client, cleanup_jobs, name="it-job-offline-backup")
+    resp = client.post(f"/v1/jobs/{job['id']}/run", json={"eval": False})
+    assert resp.status_code == 200
+    body = resp.json()
+    # 主通道语义不变；兜底结果单列落账（pushed_to_backup）
+    assert body["pushed_to"] == "failed(channel_offline)"
+    assert body["pushed_to_backup"] == "dingtalk"
+    assert no_send == [] and len(no_dingtalk_send) == 1
+    # 兜底推送的是任务的最终报告（runner 兜底路径与 agent 工具路径同一出口）
+    assert no_dingtalk_send[0]
+
+    runs = client.get(f"/v1/jobs/{job['id']}/runs").json()
+    assert runs[0]["pushed_to_backup"] == "dingtalk"
 
 
 def test_job_circuit_breaker_trips(client: TestClient, no_send, monkeypatch, cleanup_jobs: list[int]):

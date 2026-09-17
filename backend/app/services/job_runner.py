@@ -239,12 +239,17 @@ async def execute_job(job_id: int, *, eval_mode: bool = False, manual: bool = Fa
         tokens_used = max(0, get_session_totals().get(token_session, 0) - tokens_before)
 
         # ---- 推送落账（agent 已推 → 沿用；该推未推 → runner 兜底） ----
+        # pushed_to_backup（S3' §6.3）：与 pushed_to 同源（PushOutcome.backup）——
+        # agent 侧推送与 runner 兜底推送共用一套备推落账
         pushed_to: str | None = None
+        pushed_to_backup: str | None = None
         if push_expected:
             if ectx.outcome is not None:
                 pushed_to = ectx.outcome.pushed_to
+                pushed_to_backup = ectx.outcome.backup or None
             elif eval_mode:
                 # 结构性抑制兜底：eval run 该推但 agent 未走到工具层，也必须记抑制
+                # （eval 零外发红线：QQ 与钉钉备推都不会发送，backup 必为 None）
                 pushed_to = PUSHED_SUPPRESSED_EVAL
             elif outcome.answer:
                 logger.warning(
@@ -253,6 +258,7 @@ async def execute_job(job_id: int, *, eval_mode: bool = False, manual: bool = Fa
                 )
                 fallback = await egress.push_to_qq(outcome.answer, eval_mode=eval_mode)
                 pushed_to = fallback.pushed_to
+                pushed_to_backup = fallback.backup or None
 
         # ---- 结果落账 ----
         result_summary: dict[str, Any] = {"events_tail": outcome.events_tail}
@@ -306,6 +312,7 @@ async def execute_job(job_id: int, *, eval_mode: bool = False, manual: bool = Fa
                 run.cost_note = cost_note
                 run.result_summary = result_summary
                 run.pushed_to = pushed_to
+                run.pushed_to_backup = pushed_to_backup
                 await db.commit()
 
         if tripped:
@@ -328,9 +335,12 @@ async def execute_job(job_id: int, *, eval_mode: bool = False, manual: bool = Fa
         except Exception:  # noqa: BLE001 - 调度器未启动等场景
             pass
 
-        logger.info("job_runner: job=%s run=%s 结束 status=%s pushed_to=%s tokens=%s",
-                    job_name, run_id, status, pushed_to, tokens_used)
-        return {"run_id": run_id, "status": status, "pushed_to": pushed_to}
+        logger.info("job_runner: job=%s run=%s 结束 status=%s pushed_to=%s backup=%s tokens=%s",
+                    job_name, run_id, status, pushed_to, pushed_to_backup, tokens_used)
+        return {
+            "run_id": run_id, "status": status, "pushed_to": pushed_to,
+            "pushed_to_backup": pushed_to_backup,
+        }
 
 
 async def _finalize_failed_early(run_id: int, job_id: int, error: str) -> None:

@@ -165,5 +165,14 @@ class Settings(BaseSettings):
     # 调度总开关（§3.3 回滚：false = 不注册任何定时任务，通道与 job 自然失效）
     JOBS_ENABLED: bool = True
 
+    # ── S3' 钉钉告警备用通道（QQ 推送失败时兜底）──────────────────
+    # 群自定义机器人 webhook（用户自建只含自己的群，安全设置选"加签"）；
+    # 空 = 备推关闭（天然回滚）
+    DINGTALK_PUSH_WEBHOOK: str = ""
+    # 加签密钥（与 webhook 成对；安全不变量 1/4：推送目标只来自 env，非模型可填参数）
+    DINGTALK_PUSH_SECRET: str = ""
+    # backup = 仅 QQ 推送 failed(...) 时兜底（缺省）/ always = 每次双发 / off
+    DINGTALK_PUSH_MODE: str = "backup"
+
 
 settings = Settings()

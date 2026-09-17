@@ -27,8 +27,8 @@
 | **R0** ✅ | 重构清理：crew 目录退役 + 评测重锚 + API/前端 Auto 模式适配（§3b） | 无 | **已完成（2026-09-14）**：Web 端助手模式对话上线，三套评测 36/36 全绿。收尾待办见 §3b 状态注记 |
 | **S1** | **QQ 双向问答（渠道底座）**：NapCat 本机容器 + OneBot 双向 adapter + owner 白名单 + 路由 v0 + 会话映射 | R0 | QQ 私聊里直接跟助手对话：直接提问走默认链路、`/kb` 走知识库；NapCat 与告警通道底座就位。**验收通过（2026-09-15）**：问答//kb//write/断连演练全绿，7 天自用验证进行中（账本）；遗留观察：重启免扫码（ACCOUNT 已配）。7 天验证结果记入运行账本后本条才关闭 |
 | **S2** | **定时任务与推送**：调度器 + jobs + 服务器巡检告警 + KB 每日日报 | S1 | 早 8 点巡检日报 + 服务异常即时告警 + KB 增量日报（21:00），全部推到 QQ。**技术验收通过（2026-09-16）**：单测 362/集成 61 全绿、eval 零外发红线实测（agent 真实调 push_message 被抑制 + 评测用例「完全」）、调度准点触发、state_change/断连降级/真实 QQ 推送全验证。**7 天自用验证进行中（2026-09-16 起）**：8:00/21:00 日报连续到达 + ≥1 次 down→up 告警演练 + 断连演练（一晚 stop napcat 看 job_runs 落账），结果记运行账本后本条才关闭 |
-| **S3** | 钉钉双向接入（第二渠道，抽象完型验收） | S1–S2 验收通过 | 同一 Adapter 抽象接入钉钉；可选告警双推（QQ 主/钉钉备）。**已细化（2026-09-17），规格见 §6（两阶段：先 im_pipeline 抽象重构，后接钉钉）** |
-| **S4** | 飞书双向接入（用户指定的最终验收） | S3 | 第三渠道零核心改动接入，多渠道网关收口 |
+| **S3** | **钉钉告警备用通道**（2026-09-17 定向变更：原"双向接入"经核实场景不成立——公司群监听不可行、自用问答无真实场景，砍；抽象完型移至 S4 阶段 A；规格见 §6） | S2 验收通过 | egress 备推：QQ 推送失败时兜底推用户自建钉钉群 webhook（backup 缺省）；零新依赖、无企业应用 |
+| **S4** | 飞书双向接入（用户指定的最终验收；**含阶段 A：im_pipeline 抽象重构自 S3 移入**） | S3 验收通过 | 阶段 A 渠道无关管线抽取回归全绿 → 阶段 B 飞书零核心改动接入，多渠道网关收口 |
 | S5+ | 按需解锁，见第 8 节解锁登记表 | — | 有触发证据才建 |
 
 **渠道顺序与风险声明**：
@@ -363,113 +363,54 @@ job_runs:
 
 ---
 
-## 6. Slice 3 规格：钉钉双向接入（第二渠道，抽象完型验收；细化版 2026-09-17）
+## 6. Slice 3 规格：钉钉告警备用通道（定向变更版 2026-09-17，替代原"钉钉双向接入"）
 
-> 细化依据：调研文档 §1.3 + dingtalk-stream SDK 源码核实（2026-09-17，chatbot.py 字段以 SDK 为准）。原占位四条要点全部保留并展开。
+> **变更缘由（2026-09-17 用户定向）**：原方案的一个隐含动机"监听公司钉钉群的公告消息"经核实**不可行**——用户非企业管理员，自建企业的机器人进不了公司组织的群（钉钉企业间完全隔离）；群自定义机器人只能发不能收；公告类消息不 @ 机器人，永远到不了机器人；钉钉无个人消息 API，也无成熟第三方协议端（公司 IM 上跑非官方客户端 = 纪律/安全事件风险，不做）。而"自建企业里自用问答"对用户无真实场景（7 天 ≥10 次提问必然过不了，防玩具纪律直接砍）。保留价值 = **QQ 被风控时的告警兜底通道**（2026-09-16 NapCat 风控失联约 5 小时的教训）。原双向细化稿（dingtalk-stream SDK 事实核实：conversation_type/sender_staff_id/session_webhook 过期时间等）存档于 git `923d5d3`，未来做入站钉钉直接复用；**im_pipeline 抽象重构与"抽象完型"验收移至 S4 飞书（阶段 A）**。
 
-**目标一句话**：用与 QQ 完全相同的核心链路接入钉钉单聊问答——证明渠道差异全部封闭在 adapter 层（抽象完型），为 S4 飞书"零核心改动接入"铺路。
+**目标一句话**：告警/日报推送在 QQ 渠道失败时自动兜底推到用户自建钉钉群（只含自己的群 + 自定义机器人 webhook），QQ 主通道行为与落账语义零变化。
 
-**实施顺序（两阶段，防一次引入两个变量）**：
-- **阶段 A（纯重构，零新渠道）**：把 onebot_adapter 内嵌的入站管线抽成渠道无关模块 `im_pipeline`，onebot 改为调用它；全量回归（单测/集成/评测 core 层）全绿才算完成。
-- **阶段 B（新渠道）**：dingtalk_adapter 只写传输层 + 事件解析 + 回复函数，核心链路全部来自 im_pipeline。
+### 6.1 拓扑与凭据（无新依赖、无企业应用）
 
-### 6.1 阶段 A：入站管线抽象（`backend/app/channels/im_pipeline.py`）
+- 用户手机钉钉自建群（成员只有自己）→ 群设置 → 机器人 → 添加**自定义机器人**，安全设置选**加签** → 得 webhook URL + 加签密钥。
+- env（全部进 .env.example 与上线手册 §十六；不变量 4——只进 env 不进 git）：
+  - `DINGTALK_PUSH_WEBHOOK`（webhook 完整 URL；**空 = 功能关闭 = 天然回滚**）
+  - `DINGTALK_PUSH_SECRET`（加签密钥，与 webhook 成对必配）
+  - `DINGTALK_PUSH_MODE=backup|always|off`（缺省 **backup**）
+- 不需要企业内部应用、不需要 dingtalk-stream SDK、**零新依赖**（requests 已在镜像，不变量 7 自动满足）。
 
-从 onebot_adapter **平移**（行为不变，现有 onebot 单测平移后必须全绿）：
+### 6.2 发送协议（纯函数，单测覆盖）
 
-| 平移内容 | 说明 |
-|---|---|
-| `wrap_untrusted()` / `<im_content>` 纪律 | 不变量 5，逐字照抄（共享单份，非复制） |
-| 会话串行与排队（`_session_locks` / `_session_pending`） | lock key 改为 `{channel}:{sender_id}` 维度（跨渠道天然不互锁） |
-| `_ensure_session` lazy 落库、`_run_crew_and_collect`（run_crew_chat + 事件收集 + run_control 登记） | run_id 前缀由写死 `qq-` 改 `{channel}-` |
-| 并发上限检查（MAX_CONCURRENT_RUNS）与"正在处理"提示、路由 v0 调用、HITL 定案 A（`IM_ALLOWED_COMMANDS={"/kb"}` 提升为共享常量）、Web 引导文案、`[已转交 X]` 前缀、CREW_DISPLAY_NAMES、`split_long_message` | 全部不变（QQ/钉钉同策略，命令开放面单一权威） |
-| 管线主入口 `handle_inbound(msg: InboundMessage)` | 白名单 → 包裹 → 路由 → 执行 → 回复 全序列 |
+- 加签（官方 demo 同款）：`sign = urlencode(base64(HMAC-SHA256(key=secret, msg="{timestamp_ms}\n{secret})))`，追加 `&timestamp=..&sign=..`（webhook 已含 access_token 参数，用 `&` 拼接）；**时钟偏差 >1h 拒签**（部署手册注明）。
+- POST JSON `{"msgtype":"text","text":{"content": 段}}`；响应 `errcode==0` 判成功（310000=签名/安全设置错）。
+- 纯文本 + 复用 `split_long_message`（1500/段、段间 0.3s，与 QQ 同纪律；不启用钉钉 markdown，保持格式面最小）；超时 10s 单次尝试——无状态 HTTP，无"渠道在线"概念，不做断连重试。
+- 限流 20 条/分钟（机器人侧硬限）：state_change + 日报天然稀疏，不额外做客户端限速。
 
-**归一化入站结构**（adapter 把原生事件解析成它，之后进入管线）：
+### 6.3 egress 集成与落账（一切 egress 调用方自动获得兜底）
 
-```python
-@dataclass
-class InboundMessage:
-    channel: str                                        # 'qq' | 'dingtalk'（session_key 前缀/来源徽标/run_id 前缀共用）
-    sender_id: str                                      # 归一化字符串（QQ 数字 uid / 钉钉 staffId）
-    text: str                                           # 已剥离 @ 段的正文
-    is_group: bool                                      # 群消息 → 不做会话化（@ 即答），与 QQ 同取舍
-    owners: set[str]                                    # 本渠道 owner 名单（来自各自 env）
-    reply: Callable[[str], Awaitable[None]]             # 回复闭包，渠道发送细节全封闭在内
-```
+- 新服务 `backend/app/services/dingtalk_push.py`：加签 + 发送 + 分段（渠道发送细节封闭在此）；egress 只做 mode 判定与编排。
+- `push_to_qq` 主流程不变；主推送结束后按 mode 决定备推：
+  - `backup`：仅当主推送 `pushed_to` 为 `failed(...)`（含 channel_offline / no_target / api_error）时兜底；
+  - `always`：每次与 QQ 双发（QQ 成功也发）；
+  - `off` 或 webhook/secret 未配置：现状（QQ 单通道）；mode 非 off 但凭据缺失时每次推送记一条 WARNING（推送稀疏，不构成噪音）。
+- **eval 零外发不变量延伸（硬红线）**：eval 抑制的早返回先于一切发送——QQ 与钉钉在 eval 模式下都必须零调用，集成测试断言两个出口调用数均为 0。
+- 落账（alembic 0011，纯新增）：job_runs 加 `pushed_to_backup`（text null：`dingtalk` / `failed(...)` / null=未尝试）；**`pushed_to` 主渠道语义不变**——eval 硬断言、前端徽标、既有查询零影响。`PushOutcome` 增 `backup` 字段，agent 侧推送与 runner 兜底推送共用一套落账（既有纪律）。
+- push_message 工具回话如实反映兜底：QQ 失败但钉钉送达时提示"已兜底推送"，不让 agent 向用户误报"全部失败"。
 
-**adapter 保留（渠道差异封闭清单，验收审查对象）**：传输层（连接/鉴权/重连/接收循环）、原生事件 → InboundMessage 解析（@ 判定与剥离、群/单聊判定、字段容错）、owner 名单 env 解析、回复发送 API、在线状态 gauge、（推送侧发送函数，如有）。
+### 6.4 测试与验收门
 
-**渠道注册表**：`channels` 内聚合各渠道 `get_status()`（registry 或 `__init__` 导出）；`GET /v1/channels` 与前端 chip 改为遍历注册表，不 import 具体渠道——API/前端层零渠道分支。
-
-**阶段 A 验收**：onebot 相关单测平移全绿；集成全绿；评测 core 层全绿；diff 审查确认 im_pipeline 无 QQ 特有引用（无 user_id/group_id 字段、无 send_qq_message 调用、无 "qq" 字面量分支）。
-
-### 6.2 阶段 B：dingtalk_adapter（`backend/app/channels/dingtalk_adapter.py`）
-
-**接入事实（2026-09-17 核实，SDK 源码为准）**：
-- SDK：`dingtalk-stream`（官方 open-dingtalk/dingtalk-stream-sdk-python）；`DingTalkStreamClient(Credential(client_id, client_secret))` + `register_callback_handler(ChatbotMessage.TOPIC, handler)`（TOPIC=`/v1.0/im/bot/messages/get`）；`start_forever()` 阻塞式、自带断线重连。
-- 凭据 = 钉钉开放平台**企业内部应用**的 AppKey/AppSecret（env `DINGTALK_APP_KEY` / `DINGTALK_APP_SECRET`，不变量 4）；机器人"消息接收模式"须选 **Stream 模式**并开启单聊（部署步骤进上线手册）。
-- 回调 `ChatbotMessage` 关键字段：`conversation_type`（**'1' 单聊 / '2' 群聊**）、`sender_staff_id`（员工 ID = **白名单键**）、`sender_id` / `sender_nick`、`text.content`（`msgtype` 为 picture/richText 时无 text → 直接忽略）、`session_webhook`（回复 URL，**带 `sessionWebhookExpiredTime` 过期时间——只用于当次回复，严禁持久化后复用**）、`is_in_at_list`（群内是否 @ 了机器人）。
-- 回复：POST `session_webhook`，body `{"msgtype":"text","text":{"content":...}}`，**免 access_token**（S3 不引入 token 刷新逻辑；SDK 的 reply_text 即此实现）。adapter 自实现 `_post_webhook`（requests + `asyncio.to_thread`，与 http_check 同栈），不依赖 SDK handler 上下文，便于 mock。
-- 群消息：仅 `conversation_type=='2'` 且 @ 本机器人时处理（`is_in_at_list` 判定），正文 @ 残留与空白在解析层剥除（e2e 实测定案）；单聊直收。
-- 消息格式：**纯文本**（与 QQ 同纪律；钉钉 markdown/卡片能力不启用——减少格式差异面，转交前缀/分段逻辑零改动）。
-
-**线程模型（关键设计）**：
-- SDK client 在独立 daemon 线程 `start_forever()`（lifespan 启动；`DINGTALK_APP_KEY` 未配置则不启动线程，QQ 链路零影响——天然回滚开关）。
-- `handler.process`（SDK 内部事件循环）→ 解析 InboundMessage → `asyncio.run_coroutine_threadsafe(im_pipeline.handle_inbound(msg), main_loop)` 投递主循环 → **立即返回 ACK OK**（不阻塞 SDK 循环等待分钟级 crew 执行）。
-- 回复闭包捕获**当次** session_webhook 在主循环执行 POST；处理期间用户再来消息由管线排队（与 QQ 同串行纪律）。
-
-**身份/白名单/会话**：env `DINGTALK_OWNER_IDS`（staffId 逗号分隔；企业内员工默认都能 @ 机器人——白名单是唯一安全边界，空名单=全拒）；名单外 WARNING + 静默。会话映射 `dingtalk:{staff_id}`（`:/cmd` 子会话规则同 QQ）；前端来源徽标扩展 dingtalk。
-
-**在线状态**：`dingtalk_connected` + `configured`（APP_KEY 是否配置，未配置前端不渲染 chip）。SDK 不暴露连接对象——`dingtalk_connected` 以"最近事件/心跳时间未超时"近似（另加 `dingtalk_last_event_ts` gauge），断连/重连记 INFO 日志；egress 不依赖此状态（webhook 是无状态 HTTP）。
-
-### 6.3 egress 与可选双推（默认不做，用户点头才做）
-
-- S3 本体只做**入站**（钉钉问答）；egress 保持 QQ 单出口不动，eval 零外发闸门语义不变。
-- 双推方案（点头后实施）：群自定义机器人 webhook（env `DINGTALK_PUSH_WEBHOOK` + `DINGTALK_PUSH_SECRET` 加签密钥；目标只来自 env——不变量 1 延伸，`push_message` 工具仍无目标参数）；`DINGTALK_PUSH_MODE=backup|always|off` 缺省 **backup**（QQ 推送 `failed(channel_offline)` 时兜底，QQ 账号风控时告警仍有路）；加签 HMAC-SHA256 照官方 demo；限流 20 条/分钟（state_change + 日报天然稀疏）；落账：`pushed_to` 仍记主渠道结果，备推结果记 detail（不加列）。
-
-### 6.4 env 清单（新增，全部进 .env.example 与上线手册 §十六）
-
-`DINGTALK_APP_KEY`、`DINGTALK_APP_SECRET`、`DINGTALK_OWNER_IDS`（必配）；（双推启用时）`DINGTALK_PUSH_WEBHOOK`、`DINGTALK_PUSH_SECRET`、`DINGTALK_PUSH_MODE`。回滚 = 删 env 重建容器（adapter 不启动）。
-
-### 6.5 安全不变量映射（§3.2 逐条落到 S3）
-
-| 不变量 | S3 落地 |
-|---|---|
-| 1 egress 目标锁定 | 钉钉回复走 reply-to-source（当次 sessionWebhook），不新增目标面；双推目标只来自 env |
-| 4 密钥只进 env | APP_KEY/SECRET/OWNER_IDS/(PUSH_*) 不落 DB 不进 git |
-| 5 输入不可信 | 共享同一 `wrap_untrusted`（管线层单份实现） |
-| 6 owner 白名单 | `DINGTALK_OWNER_IDS`，名单外静默 + WARNING |
-| 7 依赖烧镜像 | `dingtalk-stream` 进 requirements.txt + compose build（注意其 websockets 依赖与 uvicorn 栈版本共存，构建时 pip check） |
-| 9 API 挂鉴权 | `/v1/channels` 扩展字段走既有 X-API-Key |
-
-### 6.6 测试
-
-- 单测：im_pipeline 等价回归（平移 onebot 用例）；dingtalk 事件解析（单聊/群聊判定、msgtype 非 text 忽略、字段缺失容错、@ 残留剥除）；owner 校验；`_post_webhook`（mock requests：errcode 非 0 / 超时）；线程 marshal（fake loop + run_coroutine_threadsafe）。
-- 集成：fake ChatbotHandler 回调 → mock LLM 跑通 → 断言 reply POST 参数与内容；非 owner 无 reply 调用；HITL 命令引导回复。
-- **抽象守卫（新增单测，本 Slice 特有）**：扫描 `backend/app/{services,crews}` 源码，断言无 `import onebot_adapter/dingtalk_adapter`、无渠道名字面量分支——渠道 if/else 泄漏进核心层的回归门。
-- e2e（手动，真实钉钉）：单聊默认问答（三层记忆生效）、`/kb` 转交标注、`/write` Web 引导、非 owner 静默、群 @ 即答（若开放群场景）。
-
-### 6.7 已知取舍（记录，不提前修）
-
-- sessionWebhook 有过期时间：只做当次回复；"稍后主动推送"是双推 webhook 的事，两者不混用。
-- `dingtalk_connected` 为最近事件近似（vs onebot 精确连接态）——S4 多渠道网关统一语义。
-- 钉钉 markdown/互动卡片不启用（HITL IM 卡片仍在解锁表，触发条件不变）。
-- ACK 立即返回 → 钉钉侧无法感知"处理中"状态（QQ 同样无），排队纪律已覆盖。
-
-### 6.8 验收门（全部满足才进 S4）
-
-1. CI 全绿（含抽象守卫与 dingtalk 单测/集成，dummy key 模式——SDK 不真实连接）。
-2. 镜像重建部署成功（dingtalk-stream 烧入），`/health` 200；APP_KEY 未配置时 adapter 静默不启动、QQ 链路回归无影响。
-3. 真实钉钉端到端：单聊提问收到回复（默认链路）；`/kb` 命中知识库带转交标注；`/write` 收到 Web 引导；非 owner 无回复有日志。
-4. **抽象完型审查（本 Slice 核心验收）**：抽象守卫单测 + 人工 diff 复核——services/crews 层零渠道特有分支；im_pipeline 被两个 adapter 无复制共享；渠道差异封闭清单（传输/解析/回复/状态/白名单解析）之外的一切逻辑都在管线。
-5. 文档增量：上线手册 §十六（企业内部应用创建 / 机器人消息接收模式 Stream / env 清单 / 验收清单 / 回滚）；运行账本记条目并开始 7 天验证（钉钉侧 ≥10 次真实提问）。
+- 单测（`testing/unit/test_dingtalk_push.py`）：加签固定向量（独立预计算 pin 进测试）；客户端 mock requests（errcode 0 / 310000 / 超时 / 网络异常）；mode 三态（backup 只在主 failed 触发、always 双发、off/未配置零调用）；eval 模式两渠道零调用；分段复用。
+- 集成（`testing/integration/test_api_jobs.py` 扩展）：QQ 渠道离线（mock onebot offline）+ 假 webhook → `pushed_to=failed(channel_offline)` 且 `pushed_to_backup=dingtalk`；eval run 断言两个发送出口调用数均为 0。
+- 评测：job_zero_egress 用例断言不变（suppressed(eval) 下 backup 必为 null）。
+- **验收门**：①CI 全绿；②镜像重建部署 `/health` 200 + 0011 迁移生效；③**真实兜底演练一次**：停 napcat → 手动触发巡检 job → 钉钉收到兜底告警 + job_runs 两列如实落账 → 恢复 napcat → 下一轮推送回 QQ 主通道；④上线手册 §十六 + 账本记条目。7 天验证**并入 S2 窗口**（日报到达记录表加"到达渠道"备注），不单设 ≥10 次提问门（本切片无问答功能，无自用提问面）。
 
 ## 7. Slice 4 规格：飞书双向接入（用户指定的最终验收，S3 验收后细化）
 
-- 飞书**企业自建应用** + `lark-oapi` SDK **WebSocket 长连接**订阅 `im.message.receive_v1`（免公网回调；个人免费建"企业"即可）；凭据 env `FEISHU_APP_ID` / `FEISHU_APP_SECRET`。
-- `backend/app/channels/feishu_adapter.py` 与前两个 adapter 同构；验收 = 第三渠道接入对核心链路**零改动**，多渠道网关就此收口。
-- 验收门：与 S1/S3 同标准（一周 ≥10 次真实提问）。
+> 2026-09-17 联动调整：原 S3 的**im_pipeline 抽象重构与"抽象完型"验收移到本 Slice 作为阶段 A**（S3 定向变更后，飞书是第一个真实第二入站渠道——抽象在其接入前完成并回归，接入本身零核心改动）。钉钉双向方案的 SDK 事实核实存档见 §6 变更注记（git `923d5d3`）。
+
+- **阶段 A（先做）**：onebot_adapter 入站管线抽为渠道无关 `im_pipeline`（原 §6.1 设计照用：InboundMessage 归一化 + adapter 差异封闭清单 + 渠道注册表），全量回归全绿。
+- **阶段 B**：飞书**企业自建应用** + `lark-oapi` SDK **WebSocket 长连接**订阅 `im.message.receive_v1`（免公网回调；个人免费建"企业"即可）；凭据 env `FEISHU_APP_ID` / `FEISHU_APP_SECRET`。`backend/app/channels/feishu_adapter.py` 只写传输/解析/回复，核心链路全部来自 im_pipeline；验收 = 第二入站渠道接入对核心链路**零改动**，多渠道网关就此收口。
+- 边界校准（同钉钉教训）：飞书同样是自建企业里的机器人，**监听不了用户所在公司组织的飞书群**——S4 的用户价值定位是"自用第二问答渠道 + 抽象完型"，不是消息监听。
+- 验收门：一周 ≥10 次真实提问 + 抽象完型审查（原 §6.8.4 条款移此：services/crews 零渠道分支守卫 + 人工 diff 复核）。
 
 ---
 

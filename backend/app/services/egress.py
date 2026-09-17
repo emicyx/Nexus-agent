@@ -1,13 +1,16 @@
-"""主动推送出口（v2 S2：egress 服务）。
+"""主动推送出口（v2 S2：egress 服务；S3' 增钉钉备推）。
 
-职责（执行计划 §5.4 + §5.6 + 安全不变量 1/2）：
+职责（执行计划 §5.4 + §5.6 + §6.3 + 安全不变量 1/2）：
 - 一切主动推送（巡检告警/日报/熔断告警/runner 兜底）都经 push_to_qq()，
   最终走 S1 的 onebot_adapter.send_qq_message——全系统唯一 QQ 出口；
   目标只来自 env QQ_ALERT_TARGET，任何调用方都不带目标参数。
 - eval 抑制（硬红线）：EgressContext.eval_mode 或全局 NEXUS_EVAL_MODE 时，
-  一律不发送、记 'suppressed(eval)'。
+  一律不发送、记 'suppressed(eval)'——QQ 与钉钉备推都不会被调用。
 - 断连降级：推送前查渠道状态，离线时等 5s 重查一次（NapCat 可能刚重连），
   仍离线记 'failed(channel_offline)'，不静默丢。
+- S3' 钉钉备推：主推送结束后按 DINGTALK_PUSH_MODE（backup/always/off）决定
+  是否经 dingtalk_push 兜底，结果记 outcome.backup（job_runs.pushed_to_backup）；
+  渠道发送细节封闭在 dingtalk_push，本模块只做判定与编排。
 
 线程模型：push_message 工具在 worker 线程执行（crewai_async_patch 的
 asyncio.to_thread 复制 contextvars），EgressContext 经 ContextVar 传入工具
@@ -35,11 +38,13 @@ _PUSH_RPC_TIMEOUT_S = 60.0
 
 @dataclass
 class PushOutcome:
-    """一次推送的落账结果（job_runs.pushed_to 的取值来源）。"""
+    """一次推送的落账结果（job_runs.pushed_to / pushed_to_backup 的取值来源）。"""
 
     pushed_to: str  # 'qq' | 'suppressed(eval)' | 'failed(...)' | 'failed(no_target)'
     detail: str = ""
     segments: int = 0
+    # S3' 钉钉备推结果（§6.3）：'' = 未尝试（备推关闭/未触发）；'dingtalk' / 'failed(...)'
+    backup: str = ""
 
 
 @dataclass
@@ -111,6 +116,71 @@ def _eval_mode_active(ctx: EgressContext | None) -> bool:
     return settings.NEXUS_EVAL_MODE or (ctx is not None and ctx.eval_mode)
 
 
+async def _push_main_qq(content: str) -> PushOutcome:
+    """主通道推送（原 push_to_qq 主体，逻辑不变）：QQ_ALERT_TARGET 组包 + 断连降级。"""
+    target = parse_alert_target()
+    if target is None:
+        return PushOutcome(pushed_to="failed(no_target)", detail="QQ_ALERT_TARGET 未配置或非法")
+
+    from app.channels import onebot_adapter
+
+    # 推送前查连接（§5.4）：离线 → 等 5s 重查一次（NapCat 重连窗口）
+    if not onebot_adapter.get_status()["connected"]:
+        await asyncio.sleep(_OFFLINE_RETRY_WAIT_S)
+        if not onebot_adapter.get_status()["connected"]:
+            logger.warning("egress: 渠道离线，主通道推送降级 failed(channel_offline)")
+            return PushOutcome(
+                pushed_to="failed(channel_offline)",
+                detail="onebot 渠道离线（重查一次仍离线）",
+            )
+
+    try:
+        if target["type"] == "private":
+            result = await onebot_adapter.send_qq_message(content, user_id=target["user_id"])
+        else:
+            result = await onebot_adapter.send_qq_message(content, group_id=target["group_id"])
+    except Exception as e:  # noqa: BLE001 - 发送异常如实落账，不静默丢
+        logger.exception("egress: send_qq_message 异常")
+        return PushOutcome(pushed_to=f"failed({type(e).__name__})", detail=str(e)[:200])
+
+    if result.ok:
+        return PushOutcome(pushed_to="qq", segments=result.segments)
+    return PushOutcome(pushed_to=f"failed({result.reason or 'unknown'})", segments=result.segments)
+
+
+async def _maybe_push_backup(content: str, main: PushOutcome) -> str:
+    """钉钉告警备推（S3' §6.3）：mode 判定 + 发送。返回落账值（'' = 未尝试）。
+
+    - backup：仅主推送 failed(...)（含 channel_offline / no_target / api_error）时兜底；
+    - always：与 QQ 双发（QQ 成功也发）；
+    - off / 凭据未配置：跳过（mode 非 off 但凭据缺失记 WARNING，推送稀疏不构成噪音）。
+    - eval 零外发（硬红线）：本函数只被 push_to_qq 的非 eval 分支调用，
+      eval 早返回在先——QQ 与钉钉在 eval 模式下都不会发送。
+    """
+    mode = settings.DINGTALK_PUSH_MODE
+    if mode == "off":
+        return ""
+    from app.services import dingtalk_push
+
+    if not dingtalk_push.configured():
+        logger.warning(
+            "egress: DINGTALK_PUSH_MODE=%s 但 DINGTALK_PUSH_WEBHOOK/SECRET 未配置，备推跳过", mode
+        )
+        return ""
+    if mode == "backup" and not main.pushed_to.startswith("failed("):
+        return ""
+    try:
+        result = await dingtalk_push.send_dingtalk_message(content)
+    except Exception as e:  # noqa: BLE001 - 备推异常如实落账，不静默丢
+        logger.exception("egress: 钉钉备推异常")
+        return f"failed({type(e).__name__})"
+    if result.ok:
+        logger.info("egress: 钉钉备推成功 segments=%s（主通道=%s）", result.segments, main.pushed_to)
+        return "dingtalk"
+    logger.warning("egress: 钉钉备推失败 reason=%s（主通道=%s）", result.reason, main.pushed_to)
+    return f"failed({result.reason or 'unknown'})"
+
+
 async def push_to_qq(
     content: str,
     *,
@@ -122,6 +192,8 @@ async def push_to_qq(
     - ctx 缺省取当前 contextvar（agent 工具路径）；runner 兜底路径可显式传
       eval_mode 覆盖。
     - 成功记 'qq'；eval 抑制记 'suppressed(eval)'；失败如实记 failed(...)。
+    - 主推送结束后按 DINGTALK_PUSH_MODE 决定钉钉备推（S3' §6.3），
+      结果记 outcome.backup（job_runs.pushed_to_backup）。
     - 会话内多次推送时 outcome 覆盖为最近一次（最终落账以最后一次为准）。
     """
     ctx = ctx if ctx is not None else _egress_ctx.get()
@@ -132,41 +204,8 @@ async def push_to_qq(
         _record(ctx, outcome, content)
         return outcome
 
-    target = parse_alert_target()
-    if target is None:
-        outcome = PushOutcome(pushed_to="failed(no_target)", detail="QQ_ALERT_TARGET 未配置或非法")
-        _record(ctx, outcome, content)
-        return outcome
-
-    from app.channels import onebot_adapter
-
-    # 推送前查连接（§5.4）：离线 → 等 5s 重查一次（NapCat 重连窗口）
-    if not onebot_adapter.get_status()["connected"]:
-        await asyncio.sleep(_OFFLINE_RETRY_WAIT_S)
-        if not onebot_adapter.get_status()["connected"]:
-            logger.warning("egress: 渠道离线，推送降级 failed(channel_offline) label=%s",
-                           getattr(ctx, "run_label", ""))
-            outcome = PushOutcome(pushed_to="failed(channel_offline)",
-                                  detail="onebot 渠道离线（重查一次仍离线）")
-            _record(ctx, outcome, content)
-            return outcome
-
-    try:
-        if target["type"] == "private":
-            result = await onebot_adapter.send_qq_message(content, user_id=target["user_id"])
-        else:
-            result = await onebot_adapter.send_qq_message(content, group_id=target["group_id"])
-    except Exception as e:  # noqa: BLE001 - 发送异常如实落账，不静默丢
-        logger.exception("egress: send_qq_message 异常")
-        outcome = PushOutcome(pushed_to=f"failed({type(e).__name__})", detail=str(e)[:200])
-        _record(ctx, outcome, content)
-        return outcome
-
-    if result.ok:
-        outcome = PushOutcome(pushed_to="qq", segments=result.segments)
-    else:
-        outcome = PushOutcome(pushed_to=f"failed({result.reason or 'unknown'})",
-                              segments=result.segments)
+    outcome = await _push_main_qq(content)
+    outcome.backup = await _maybe_push_backup(content, outcome)
     _record(ctx, outcome, content)
     return outcome
 
@@ -198,12 +237,17 @@ def push_from_tool(content: str) -> str:
         outcome = PushOutcome(pushed_to=f"failed({type(e).__name__})", detail=str(e)[:200])
         ctx.outcome = outcome
     if outcome.pushed_to == "qq":
-        return (
-            f"✅ 推送成功（{outcome.segments} 段，目标来自系统配置）。"
-            "请基于推送结果给出简短结论，不要重复推送。"
-        )
+        msg = f"✅ 推送成功（{outcome.segments} 段，目标来自系统配置）。"
+        if outcome.backup == "dingtalk":
+            msg += "（双推模式：钉钉备用通道也已送达）"
+        return msg + "请基于推送结果给出简短结论，不要重复推送。"
     if outcome.pushed_to == "suppressed(eval)":
         return "⚠️ 本次为 eval 演练运行：推送被系统抑制（未真实发送），任务流程视同已推送继续。"
+    if outcome.backup == "dingtalk":
+        return (
+            f"⚠️ QQ 主通道推送失败（{outcome.pushed_to}），内容已兜底推送到钉钉备用通道。"
+            "请如实向用户说明主通道失败与兜底送达两件事，不要重复推送。"
+        )
     return (
         f"❌ 推送失败：{outcome.pushed_to}（{outcome.detail}）。"
         "请如实向用户报告推送失败与原因，不要反复重试推送。"

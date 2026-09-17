@@ -28,6 +28,9 @@ PUSHED_QQ = "qq"
 PUSHED_SUPPRESSED_EVAL = "suppressed(eval)"
 PUSHED_FAILED_OFFLINE = "failed(channel_offline)"
 
+# job_runs.pushed_to_backup 取值（S3' 钉钉告警备推；None = 未尝试/备推关闭）
+PUSHED_BACKUP_DINGTALK = "dingtalk"
+
 
 class Job(Base, TimestampMixin):
     """一个定时/间隔任务：到点 → 渲染输入模板 → 跑 crew → 按策略推送。"""
@@ -83,6 +86,8 @@ class JobRun(Base, TimestampMixin):
     result_summary: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
     # 'qq' / 'suppressed(eval)' / 'failed(channel_offline)' / 'failed(...)' / null
     pushed_to: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # S3' 备推落账：'dingtalk' / 'failed(...)' / null（未尝试或备推关闭）——主渠道语义不变
+    pushed_to_backup: Mapped[str | None] = mapped_column(String(64), nullable=True)
 
     def __repr__(self) -> str:
         return f"<JobRun {self.id} job={self.job_id} status={self.status}>"

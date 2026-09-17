@@ -60,6 +60,8 @@ class JobRunRead(BaseModel):
     cost_note: str
     result_summary: dict | None = None
     pushed_to: str | None = None
+    # S3' 备推落账：'dingtalk' / 'failed(...)' / null（未尝试或备推关闭）
+    pushed_to_backup: str | None = None
     started_at: datetime
     finished_at: datetime | None = None
 
@@ -72,3 +74,4 @@ class JobTriggerResponse(BaseModel):
     run_id: int
     status: str
     pushed_to: str | None
+    pushed_to_backup: str | None = None  # S3' 钉钉备推结果（'dingtalk' / 'failed(...)' / null）
