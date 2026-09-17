@@ -410,7 +410,13 @@ job_runs:
 > 2026-09-17 联动调整：原 S3 的**im_pipeline 抽象重构与"抽象完型"验收移到本 Slice 作为阶段 A**（S3 定向变更后，飞书是第一个真实第二入站渠道——抽象在其接入前完成并回归，接入本身零核心改动）。钉钉双向方案的 SDK 事实核实存档见 §6 变更注记（git `923d5d3`）。
 > **开工门（S3 搁置教训）**：动手前先回答"我会真的每天在飞书里跟它说话吗"——没有肯定答案就不开（防玩具纪律，S3' 当日搁置实录在账本）。
 
-- **阶段 A（先做）**：onebot_adapter 入站管线抽为渠道无关 `im_pipeline`（原 §6.1 设计照用：InboundMessage 归一化 + adapter 差异封闭清单 + 渠道注册表），全量回归全绿。
+- **阶段 A（先做，纯重构零新渠道、无需凭据）**：onebot_adapter 内嵌入站管线抽为渠道无关 `backend/app/channels/im_pipeline.py`，行为不变，全量回归（单测/集成/评测 core 层）全绿才算完成。设计要点（原 S3 细化稿 §6.1 移入，2026-09-17）：
+  - 归一化结构 `InboundMessage{channel, sender_id, text, is_group, owners, reply: Callable[[str], Awaitable[None]]}`——adapter 把原生事件解析成它，之后进入管线；回复闭包把渠道发送细节封闭在 adapter 内；
+  - 管线主入口 `handle_inbound(msg)`：白名单 → `wrap_untrusted`（单份共享，不变量 5）→ 路由 v0（同一纯函数）→ HITL 定案 A（`IM_ALLOWED_COMMANDS={"/kb"}` 共享常量）→ 并发上限检查 → 会话串行排队（lock key `{channel}:{sender_id}`，跨渠道天然不互锁）→ `run_crew_chat`（run_id 前缀 `{channel}-`）→ 回复；
+  - 平移内容（from onebot_adapter，行为不变）：`wrap_untrusted` / `_ensure_session` / `_run_crew_and_collect`（含 run_control 登记）/ 会话锁与排队 / MAX_CONCURRENT_RUNS 检查与"正在处理"提示 / Web 引导文案 / `[已转交 X]` 前缀 / CREW_DISPLAY_NAMES / `split_long_message`；
+  - adapter 保留（渠道差异封闭清单，验收审查对象）：传输层（连接/鉴权/重连/接收循环）、原生事件解析（@ 判定与剥离、群/单聊判定、字段容错）、owner env 解析、回复发送 API、在线状态 gauge；
+  - 渠道注册表：channels 内聚合各渠道 `get_status()`，`GET /v1/channels` 与前端 chip 改为遍历注册表，不 import 具体渠道；
+  - 阶段 A 验收：onebot 相关单测平移全绿 + diff 审查确认 im_pipeline 无 QQ 特有引用（无 user_id/group_id 字段、无 send_qq_message 调用、无 "qq" 字面量分支）。
 - **阶段 B**：飞书**企业自建应用** + `lark-oapi` SDK **WebSocket 长连接**订阅 `im.message.receive_v1`（免公网回调；个人免费建"企业"即可）；凭据 env `FEISHU_APP_ID` / `FEISHU_APP_SECRET`。`backend/app/channels/feishu_adapter.py` 只写传输/解析/回复，核心链路全部来自 im_pipeline；验收 = 第二入站渠道接入对核心链路**零改动**，多渠道网关就此收口。
 - 边界校准（同钉钉教训）：飞书同样是自建企业里的机器人，**监听不了用户所在公司组织的飞书群**——S4 的用户价值定位是"自用第二问答渠道 + 抽象完型"，不是消息监听。
 - 验收门：一周 ≥10 次真实提问 + 抽象完型审查（原 §6.8.4 条款移此：services/crews 零渠道分支守卫 + 人工 diff 复核）。
