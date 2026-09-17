@@ -48,15 +48,24 @@ jobs:
           pip install -r backend/requirements.txt pytest pytest-asyncio
       # postgres 镜像含 zhparser（首次构建需编译，约 3-5 分钟）
       - name: Start postgres + redis
-        run: docker compose up -d --build postgres redis
+        run: |
+          # compose 引用 .env（backend 的 env_file）；CI 上从模板生成一份（仅起 PG/Redis，值不敏感）
+          cp .env.example .env
+          docker compose up -d --build postgres redis
       - name: Wait for postgres healthy
         run: |
-          for i in $(seq 1 30); do
+          # 2026-09-17 实测记录：CI runner 上 initdb+init.sh 可能远慢于本机（本机 6-45s），
+          # 曾 150s 等不到 healthy——等 5 分钟，超时必须打容器日志让失败可诊断
+          for i in $(seq 1 60); do
             status=$(docker inspect --format='{{.State.Health.Status}}' $(docker compose ps -q postgres) 2>/dev/null || echo starting)
             echo "postgres: $status"
             [ "$status" = "healthy" ] && exit 0
+            [ "$status" = "unhealthy" ] && break
             sleep 5
           done
+          echo "::group::postgres container logs (wait timeout)"
+          docker logs $(docker compose ps -q postgres) 2>&1 | tail -60
+          echo "::endgroup::"
           exit 1
       # 迁移链验证：0001→head 必须能在干净库上完整执行
       # （此前 create_all 掩盖了模型与迁移漂移，如 chat_session_summaries 曾缺迁移）
