@@ -229,25 +229,24 @@ async def _process_inbound(msg: InboundMessage, text: str, crew_name: str, prefi
         session_key = session_key_for(msg.channel, msg.sender_id, crew_name)
         try:
             await _ensure_session(session_key, crew_id, text, msg.channel)
-        except Exception:
+        except Exception:  # noqa: BLE001 - 会话落库失败不阻断回答（非致命）
             logger.exception("im[%s]: ensure_session failed (非致命)", msg.channel)
 
     wrapped = wrap_untrusted(text)
 
     lock_key = f"{msg.channel}:{msg.sender_id}"
     lock = _session_locks.setdefault(lock_key, asyncio.Lock())
-    if lock.locked():
+    queued = lock.locked()
+    if queued:
         pending = _session_pending.get(lock_key, 0)
         if pending >= settings.IM_SESSION_QUEUE_MAX:
             await msg.reply("正在处理中，请稍候。")
             return
         _session_pending[lock_key] = pending + 1
-        async with lock:
+    async with lock:
+        if queued:
             _session_pending[lock_key] = max(0, _session_pending.get(lock_key, 1) - 1)
-            answer = await _run_crew_and_collect(msg.channel, crew_id, wrapped, session_key)
-    else:
-        async with lock:
-            answer = await _run_crew_and_collect(msg.channel, crew_id, wrapped, session_key)
+        answer = await _run_crew_and_collect(msg.channel, crew_id, wrapped, session_key)
 
     reply = f"{prefix}{answer}" if prefix and answer else answer
     if not reply:

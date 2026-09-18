@@ -279,6 +279,31 @@ def test_cross_channel_locks_independent(monkeypatch):
     assert order == ["alpha-start", "beta-done", "alpha-end"]
 
 
+def test_run_id_uses_channel_prefix(monkeypatch):
+    """run_id 前缀 {channel}-（§7 指定；QQ 路径即 qq-N 原值）——run_control 登记随之生效。"""
+    from app.core.events import AgentEvent, try_put
+
+    registered: dict = {}
+
+    async def fake_chat(crew_id, message, queue, loop, session_id=None):
+        try_put(queue, AgentEvent(type="final_answer", content="ok"))
+        try_put(queue, None)
+
+    monkeypatch.setattr(ip, "run_crew_chat", fake_chat)
+    monkeypatch.setattr(ip, "register_run",
+                        lambda run_id, **kw: registered.__setitem__("run_id", run_id))
+    monkeypatch.setattr(ip, "unregister_run", lambda run_id: None)
+    monkeypatch.setattr(ip, "bind_run_cancel_event", lambda: None)
+    monkeypatch.setattr(ip, "current_cancel_event", lambda: None)
+
+    async def run():
+        return await ip._run_crew_and_collect("demo", 7, "hi", None)
+
+    answer = asyncio.run(run())
+    assert answer == "ok"
+    assert registered["run_id"].startswith("demo-")
+
+
 # ── 抽象守卫（阶段 A 验收条款的自动化形态） ──────────────────────────────
 
 def test_im_pipeline_source_has_no_channel_specific_references():

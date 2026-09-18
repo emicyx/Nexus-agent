@@ -121,7 +121,7 @@ Agent 调用 HumanApprovalTool._run()
 
 ### 4.5 v2 数据流（R0 起：助手模式与命令路由）
 
-v2 把系统从"Crew 聊天平台"转为"常驻个人助理"。R0 落地第一条增量数据流——**助手模式（Auto）**，后续 Slice（S1 定时任务 → IM 推送 / S3 IM 入站问答）在此之上叠加：
+v2 把系统从"Crew 聊天平台"转为"常驻个人助理"。R0 落地第一条增量数据流——**助手模式（Auto）**，S1/S2 渠道与调度链路已在其上落地（见 4.6）：
 
 ```
 Web /chat（默认 Auto 模式）
@@ -143,6 +143,46 @@ Web /chat（默认 Auto 模式）
 ```
 
 设计约束（v2 执行计划 §3b）：路由 v0 必须保持纯确定性零 LLM；LLM 路由器属解锁表组件，触发证据成立才建。crew 目录退役（team_orchestrator / safety_check）由 seed 幂等同步删除（不只 upsert），依赖行靠 DB 级 FK CASCADE 清理。
+
+### 4.6 渠道数据流（S1 起：IM 入站问答与出站推送；S4 阶段 A 渠道无关化）
+
+入站与出站共享一个事实：**执行引擎只有一条**（4.1 的 run_crew_chat），渠道只是它的一条入口与一个出口。
+
+```
+入站（IM → 引擎）：
+NapCat（QQ 协议端，compose 第 5 容器）
+  → 反向 WS /v1/channels/onebot/ws?token=...（token 校验失败立即断开；单连接顶替）
+  → onebot_adapter【渠道差异封闭层】：
+      传输（连接/鉴权/重连/接收循环）+ 原生事件解析（群 @ 判定与剥离、
+      群/私聊判定、字段容错）+ owner env 解析 + 回复发送 API + 在线状态
+  → InboundMessage{channel, sender_id, text, is_group, owners, reply}
+      （归一化结构；reply 是回复闭包，发送细节封闭在 adapter 内）
+  → im_pipeline.handle_inbound【渠道无关，全渠道共享一份】：
+      owner 白名单（名单外静默）
+      → <im_content> 不可信包裹（防 IM 提示注入）
+      → route_v0.route_message（与 4.5 同一纯函数）
+      → HITL 定案 A（IM 侧仅默认问答 + /kb，审批类命令引导回 Web）
+      → 全局并发检查（MAX_CONCURRENT_RUNS，与 Web 端共享）
+      → 发送者级串行排队（锁 {channel}:{sender_id}，上限 IM_SESSION_QUEUE_MAX=5，
+        跨渠道不互锁）
+      → run_crew_chat（run_id 前缀 {channel}-，三层记忆全生效）
+  → reply(text) 回事件来源（reply-to-source，不引入新目标面）
+
+出站（引擎 → IM）：
+job 调度产物 / push_message 工具（无目标参数）
+  → services/egress（eval 零外发早返回；目标只来自 env QQ_ALERT_TARGET）
+  → send_qq_message（全系统唯一 QQ 出口：对话回复与主动推送同源；
+    断连如实落账 job_runs.pushed_to=failed(channel_offline)）
+
+渠道状态聚合：
+channels/registry.py（渠道模块 import 时自注册）
+  → GET /v1/channels、/metrics {name}_connected gauge、前端 chip 遍历注册表，
+    消费方不 import 具体渠道——第二渠道接入时消费方零改动
+```
+
+会话映射：私聊 `qq:{uid}` 主会话；命令路由挂子会话 `qq:{uid}:/cmd`（ChatSession.crew_id 硬绑定，避免不同链路 STM 互染）；群聊不全会话化（@ 即答）。
+
+抽象守卫：单测扫描 im_pipeline 源码，断言零渠道特有 token（渠道名/渠道字段名/渠道发送函数）——渠道特例回流管线会被 CI 拦下。第二渠道（飞书）经开工门裁定不开工（无真实使用场景，执行计划 §7），解锁后按存档设计接入。
 
 ---
 
@@ -260,7 +300,7 @@ Alembic 迁移 0001-0007。启动时 `create_all + ensure_seed` 自动建表/种
 | AliyunLLM 同步/异步双实现 ~700 行镜像 | 维护成本高，改一处忘一处 | 合并为单实现 |
 | factory.py 千余行 | 装配/记忆/patch/缓存混杂 | 拆分模块（P2-2） |
 | SSE 事件类型双端手工同步 | 漂移风险（task_completed/delegation 已漏） | codegen 或共享 schema |
-| git 中零测试、无 CI | monkey-patch 与 SSE 协议无回归保障 | 提交 testing/ + CI（P1-2，P0 回归测试已就位） |
+| ~~git 中零测试、无 CI~~ | ~~monkey-patch 与 SSE 协议无回归保障~~ | ✅ 已解决（v2）：testing/ 单测 396 + 集成 62 已入库，CI 三 job（前端 tsc+build / 后端单测 / 后端集成） |
 | 部署仅 dev 模式 | Dockerfile 带 --reload / npm run dev | 生产构建路径 |
 | Playwright 渲染路的浏览器内重定向 | 入口 URL 已校验，30x 跳私网属残余风险 | request 拦截（低优先） |
 | ivfflat 静态索引 | 大规模语料检索慢 | HNSW 或按数据量调参 |
